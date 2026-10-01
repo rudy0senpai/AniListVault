@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Optional
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
@@ -10,6 +12,8 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMenu,
     QMenuBar,
+    QMessageBox,
+    QProgressDialog,
     QPushButton,
     QScrollArea,
     QVBoxLayout,
@@ -17,6 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from animevault.models.anime import Anime
+from animevault.services.workers import BulkEnrichmentWorker
 from animevault.ui.add_anime_dialog import AddAnimeDialog
 from animevault.ui.anime_card import AnimeCard
 
@@ -24,14 +29,15 @@ from animevault.ui.anime_card import AnimeCard
 class MainWindow(QMainWindow):
     """Top-level window containing the library browser."""
 
-    # Internal: fired when the anime list changes so the window can
-    # re-render the card layout.
     library_changed = Signal()
 
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("AnimeVault")
-        self.resize(900, 600)
+        self.resize(920, 640)
+
+        self._bulk_worker: Optional[BulkEnrichmentWorker] = None
+        self._progress_dialog: Optional[QProgressDialog] = None
 
         self._central = QWidget()
         self.setCentralWidget(self._central)
@@ -59,7 +65,7 @@ class MainWindow(QMainWindow):
         self._content = QWidget()
         self._content_layout = QVBoxLayout()
         self._content_layout.setContentsMargins(16, 0, 16, 16)
-        self._content_layout.setSpacing(12)
+        self._content_layout.setSpacing(10)
         self._content_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self._content.setLayout(self._content_layout)
 
@@ -94,6 +100,17 @@ class MainWindow(QMainWindow):
         quit_action.triggered.connect(QApplication_instance_quit)
         file_menu.addAction(quit_action)
 
+        # Tools menu
+        tools_menu: QMenu = menubar.addMenu("&Tools")
+
+        fetch_missing_action = QAction("&Fetch Missing Metadata", self)
+        fetch_missing_action.triggered.connect(lambda: self._on_bulk_enrich(refresh_all=False))
+        tools_menu.addAction(fetch_missing_action)
+
+        refresh_all_action = QAction("&Refresh All Metadata", self)
+        refresh_all_action.triggered.connect(lambda: self._on_bulk_enrich(refresh_all=True))
+        tools_menu.addAction(refresh_all_action)
+
         # Help menu
         help_menu: QMenu = menubar.addMenu("&Help")
 
@@ -102,13 +119,11 @@ class MainWindow(QMainWindow):
         help_menu.addAction(about_action)
 
     def _show_about(self) -> None:
-        from PySide6.QtWidgets import QMessageBox
-
         QMessageBox.about(
             self,
             "About AnimeVault",
-            "<b>AnimeVault</b> v0.0.1<br>"
-            "A minimal desktop anime library manager.<br><br>"
+            "<b>AnimeVault</b> v0.2.0<br>"
+            "Anime library manager with multi-provider metadata enrichment.<br><br>"
             "Built with PySide6 and SQLite.",
         )
 
@@ -120,9 +135,56 @@ class MainWindow(QMainWindow):
         if dialog.exec() == AddAnimeDialog.DialogCode.Accepted:
             self.library_changed.emit()
 
+    def _on_bulk_enrich(self, refresh_all: bool = False) -> None:
+        """Run library-wide enrichment in bounded background chunks."""
+        animes = Anime.all()
+        if not animes:
+            QMessageBox.information(self, "Empty Library", "There are no anime in your library.")
+            return
+
+        title_mode = "Refreshing All Metadata" if refresh_all else "Fetching Missing Metadata"
+        self._progress_dialog = QProgressDialog(
+            "Initializing metadata fetcher...", "Cancel", 0, len(animes), self
+        )
+        self._progress_dialog.setWindowTitle(title_mode)
+        self._progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
+        self._progress_dialog.setMinimumDuration(200)
+
+        self._bulk_worker = BulkEnrichmentWorker(animes, refresh_all=refresh_all, parent=self)
+        self._progress_dialog.canceled.connect(self._bulk_worker.cancel)
+
+        self._bulk_worker.progress.connect(self._on_bulk_progress)
+        self._bulk_worker.enrichment_finished.connect(self._on_bulk_finished)
+        self._bulk_worker.start()
+
+    def _on_bulk_progress(self, current: int, total: int, message: str, stats: dict) -> None:
+        if self._progress_dialog:
+            self._progress_dialog.setValue(current)
+            stat_text = (
+                f"{message}\n\n"
+                f"Progress: {current} / {total}\n"
+                f"Updated: {stats['updated']} | Cached: {stats['cached']} | "
+                f"Posters: {stats['posters']} | Failed: {stats['failed']}"
+            )
+            self._progress_dialog.setLabelText(stat_text)
+
+    def _on_bulk_finished(self, stats: dict) -> None:
+        if self._progress_dialog:
+            self._progress_dialog.close()
+
+        self.library_changed.emit()
+        QMessageBox.information(
+            self,
+            "Enrichment Complete",
+            f"Finished processing anime library!\n\n"
+            f"• Updated: {stats['updated']}\n"
+            f"• Cached/Skipped: {stats['cached']}\n"
+            f"• Posters downloaded: {stats['posters']}\n"
+            f"• Failed: {stats['failed']}",
+        )
+
     def _refresh_library(self) -> None:
         """Rebuild the card layout from the database."""
-        # Clear existing cards
         while self._content_layout.count():
             child = self._content_layout.takeAt(0)
             if child.widget() is not None:
@@ -137,6 +199,8 @@ class MainWindow(QMainWindow):
 
         for anime in animes:
             card = AnimeCard(anime)
+            card.refresh_requested.connect(self.library_changed.emit)
+            card.deleted.connect(self.library_changed.emit)
             self._content_layout.addWidget(card)
 
         count = len(animes)

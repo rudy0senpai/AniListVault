@@ -45,6 +45,35 @@ CREATE TABLE IF NOT EXISTS anime (
 CREATE INDEX IF NOT EXISTS idx_anime_title ON anime(title);
 CREATE INDEX IF NOT EXISTS idx_anime_status ON anime(status);
 
+CREATE TABLE IF NOT EXISTS anime_metadata (
+    anime_id            INTEGER PRIMARY KEY,
+    title_en            TEXT    DEFAULT '',
+    synopsis            TEXT    DEFAULT '',
+    media_type          TEXT    DEFAULT '',
+    airing_status       TEXT    DEFAULT '',
+    genres              TEXT    DEFAULT '',
+    studios             TEXT    DEFAULT '',
+    aired_from          TEXT    DEFAULT '',
+    aired_to            TEXT    DEFAULT '',
+    season              TEXT    DEFAULT '',
+    season_year         INTEGER,
+    duration            INTEGER DEFAULT 0,
+    poster_url          TEXT    DEFAULT '',
+    poster_path         TEXT    DEFAULT '',
+    mal_id              INTEGER,
+    anilist_id          INTEGER,
+    kitsu_id            TEXT    DEFAULT '',
+    tmdb_id             INTEGER,
+    source_provider     TEXT    DEFAULT '',
+    metadata_fetched_at TEXT    DEFAULT '',
+    FOREIGN KEY (anime_id) REFERENCES anime(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_metadata_anilist_id ON anime_metadata(anilist_id);
+CREATE INDEX IF NOT EXISTS idx_metadata_mal_id ON anime_metadata(mal_id);
+CREATE INDEX IF NOT EXISTS idx_metadata_kitsu_id ON anime_metadata(kitsu_id);
+CREATE INDEX IF NOT EXISTS idx_metadata_tmdb_id ON anime_metadata(tmdb_id);
+
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT
@@ -114,6 +143,7 @@ def initialize_database(path: Path | None = None) -> SchemaInfo:
     # thread-local connection that the GUI will use.
     conn = sqlite3.connect(str(db_path), detect_types=sqlite3.PARSE_DECLTYPES)
     try:
+        conn.execute("PRAGMA foreign_keys=ON;")
         conn.executescript(_SCHEMA_SQL)
         conn.execute(
             "INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', ?);",

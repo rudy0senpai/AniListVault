@@ -49,7 +49,7 @@ class TestInitializeDatabase:
         cols = cursor.fetchall()
         id_col = next(c for c in cols if c["name"] == "id")
         assert id_col["pk"] == 1
-        assert "AUTOINCREMENT" in id_col["dflt_value"] or id_col["type"].upper() == "INTEGER"
+        assert (id_col["dflt_value"] and "AUTOINCREMENT" in id_col["dflt_value"]) or id_col["type"].upper() == "INTEGER"
 
     def test_title_not_null(self, db_conn: sqlite3.Connection):
         """title column must have NOT NULL constraint."""
