@@ -53,14 +53,14 @@ class MainWindow(QMainWindow):
         # --- Scroll area for cards ---
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
-        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.AsNeeded)
-        self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.AsNeeded)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
         self._content = QWidget()
         self._content_layout = QVBoxLayout()
         self._content_layout.setContentsMargins(16, 0, 16, 16)
         self._content_layout.setSpacing(12)
-        self._content_layout.setAlignment(Qt.AlignmentFlag.Top)
+        self._content_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self._content.setLayout(self._content_layout)
 
         self._scroll.setWidget(self._content)

@@ -46,7 +46,7 @@ class AddAnimeDialog(QDialog):
 
         # Layout
         layout = QVBoxLayout()
-        layout.addWidget(self._form_widget)
+        layout.addLayout(self._form_widget)
         layout.addWidget(self._button_box)
         self.setLayout(layout)
 
