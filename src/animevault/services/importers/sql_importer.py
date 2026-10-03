@@ -325,6 +325,88 @@ def _coerce_tier(value):
         return None
 
 
+def read_literature_rows(db_path: Path) -> tuple[list[dict], list[str]]:
+    """Read manga / manhwa / manhua rows from a restored dump.
+
+    Mirrors :func:`read_anime_rows` so a dump written by AnimeVault's own
+    SQL export restores literature as well as anime.
+    """
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    notes: list[str] = []
+    rows: list[dict] = []
+    try:
+        tables = [
+            r[0]
+            for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        ]
+        if "literature" not in tables:
+            return [], []
+
+        lit_cols = {r[1] for r in conn.execute("PRAGMA table_info(literature)")}
+        meta_cols: set[str] = set()
+        meta_rows: dict[int, sqlite3.Row] = {}
+        if "literature_metadata" in tables:
+            meta_cols = {
+                r[1] for r in conn.execute("PRAGMA table_info(literature_metadata)")
+            }
+            for m in conn.execute("SELECT * FROM literature_metadata"):
+                meta_rows[m["literature_id"]] = m
+
+        for a in conn.execute("SELECT * FROM literature"):
+            m = meta_rows.get(a["id"])
+
+            def val(col: str, default=None):
+                if col in lit_cols and a[col] is not None:
+                    return a[col]
+                if m is not None and col in meta_cols and m[col] is not None:
+                    return m[col]
+                return default
+
+            rows.append(
+                {
+                    "title": a["title"] if "title" in lit_cols else None,
+                    "category": a["category"] if "category" in lit_cols else "manga",
+                    "title_native": val("title_native", "") or "",
+                    "title_en": val("title_en", "") or "",
+                    "synonyms": val("synonyms", "") or "",
+                    "format": val("format", "") or "",
+                    "status": _coerce_status(val("status"), default="watching"),
+                    "tier": _coerce_tier(val("tier")),
+                    "rewatches": val("rewatches", 0) or 0,
+                    "chapters": val("chapters", 0) or 0,
+                    "chapters_read": val("chapters_read", 0) or 0,
+                    "volumes": val("volumes", 0) or 0,
+                    "favorite": bool(val("favorite", 0)),
+                    "notes": val("notes", "") or "",
+                    "first_read": val("first_read", "") or "",
+                    "last_read": val("last_read", "") or "",
+                    "completed_date": val("completed_date", "") or "",
+                    "privacy": val("privacy", "public") or "public",
+                    "origin_country": val("origin_country", "") or "",
+                    "synopsis": val("synopsis", "") or "",
+                    "genres": val("genres", "") or "",
+                    "authors": val("authors", "") or "",
+                    "artists": val("artists", "") or "",
+                    "serialization": val("serialization", "") or "",
+                    "pub_status": val("pub_status", "") or "",
+                    "started_at": val("started_at", "") or "",
+                    "ended_at": val("ended_at", "") or "",
+                    "cover_url": val("cover_url", "") or "",
+                    "cover_path": val("cover_path", "") or "",
+                    "anilist_id": val("anilist_id"),
+                    "kitsu_id": val("kitsu_id") or None,
+                    "mal_id": val("mal_id"),
+                    "source_provider": val("source_provider", "") or "",
+                }
+            )
+    finally:
+        conn.close()
+    return rows, notes
+
+
 def read_anime_rows(db_path: Path) -> tuple[list[dict], list[str]]:
     """Read anime (+ metadata) rows from a restored dump.
 
@@ -437,6 +519,91 @@ class SqlImportResult:
         }
 
 
+def _import_literature_row(data: dict, result: SqlImportResult) -> None:
+    """Persist one literature row recovered from a SQL dump."""
+    from animevault.models.literature import Literature
+    from animevault.services.importers.row_parser import _to_list
+    from animevault.tiers import score_to_tier  # noqa: F401  (shared mapping)
+
+    title = (data.get("title") or "").strip()
+    if not title:
+        result.invalid += 1
+        return
+
+    try:
+        existing = Literature.find_by_provider_id(
+            anilist_id=data.get("anilist_id"),
+            kitsu_id=data.get("kitsu_id"),
+            mal_id=data.get("mal_id"),
+        )
+        if existing is None:
+            existing = Literature.find_by_title(title, data.get("category"))
+
+        if existing is None:
+            item = Literature(
+                id=None,
+                title=title,
+                category=data.get("category") or "manga",
+                status=data.get("status") or "watching",
+                tier=data.get("tier"),
+                rewatches=int(data.get("rewatches") or 0),
+                chapters=int(data.get("chapters") or 0),
+                chapters_read=int(data.get("chapters_read") or 0),
+                volumes=int(data.get("volumes") or 0),
+                favorite=bool(data.get("favorite")),
+                notes=data.get("notes", ""),
+                first_read=data.get("first_read", ""),
+                last_read=data.get("last_read", ""),
+                completed_date=data.get("completed_date", ""),
+                privacy=data.get("privacy", "public"),
+                title_native=data.get("title_native", ""),
+                synonyms=_to_list(data.get("synonyms")),
+                format=data.get("format", ""),
+                synopsis=data.get("synopsis", ""),
+                genres=_to_list(data.get("genres")),
+                authors=_to_list(data.get("authors")),
+                artists=_to_list(data.get("artists")),
+                serialization=data.get("serialization", ""),
+                pub_status=data.get("pub_status", ""),
+                origin_country=data.get("origin_country", ""),
+                started_at=data.get("started_at", ""),
+                ended_at=data.get("ended_at", ""),
+                cover_url=data.get("cover_url", ""),
+                cover_path=data.get("cover_path", ""),
+                anilist_id=data.get("anilist_id"),
+                kitsu_id=data.get("kitsu_id"),
+                mal_id=data.get("mal_id"),
+                source_provider=data.get("source_provider", ""),
+            )
+            item.save()
+            result.added += 1
+            if not (item.anilist_id or item.mal_id):
+                result.needs_enrichment.append(item.id)
+            return
+
+        changed = False
+        for attr, incoming in (
+            ("tier", data.get("tier")),
+            ("notes", data.get("notes")),
+            ("synopsis", data.get("synopsis")),
+            ("chapters", data.get("chapters")),
+            ("chapters_read", data.get("chapters_read")),
+            ("volumes", data.get("volumes")),
+        ):
+            # Only fill blanks: the dump must not overwrite richer local data.
+            if incoming and not getattr(existing, attr):
+                setattr(existing, attr, incoming)
+                changed = True
+        if changed:
+            existing.save()
+            result.updated += 1
+        else:
+            result.duplicates += 1
+    except Exception as exc:
+        logger.warning("SQL literature import failed for %r: %s", title, exc)
+        result.invalid += 1
+
+
 def preview_sql(path: str | Path, *, convert_scores: bool = False) -> SqlPreview:
     """Validate a dump and describe it, without touching the live database."""
     path = Path(path)
@@ -498,12 +665,26 @@ def import_sql(
     rows, notes = read_anime_rows(tmp_db)
     result.notes.extend(notes)
 
+    # Literature travels in the same dump; tag each row so one loop can
+    # handle both categories.
+    lit_rows, lit_notes = read_literature_rows(tmp_db)
+    result.notes.extend(lit_notes)
+    for data in lit_rows:
+        data["_kind"] = "literature"
+    for data in rows:
+        data["_kind"] = "anime"
+    rows = rows + lit_rows
+
     from animevault.tiers import score_to_tier
 
     total = len(rows)
     for idx, data in enumerate(rows, start=1):
         if should_cancel is not None and should_cancel():
             break
+
+        if data.get("_kind") == "literature":
+            _import_literature_row(data, result)
+            continue
 
         title = (data.get("title") or "").strip()
         if not title:

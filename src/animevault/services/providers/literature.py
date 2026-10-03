@@ -84,9 +84,10 @@ _AUTHOR_ROLES = {"Story & Art", "Story", "Art", "Writer", "Author", "Artist"}
 class LiteratureMetadata:
     """Canonical literature metadata from any provider."""
 
-    title: str = ""
-    title_en: str = ""
-    title_native: str = ""
+    title: str = ""          # canonical (English when available)
+    title_en: str = ""     # provider English title
+    title_romaji: str = ""  # romanized native title
+    title_native: str = ""  # native script (日本語 / 한국어 / 中文)
     synonyms: list[str] = field(default_factory=list)
     category: str = MEDIA_MANGA
     format: str = ""
@@ -109,7 +110,21 @@ class LiteratureMetadata:
     source_provider: str = "anilist"
 
     def display_title(self) -> str:
-        return self.title or self.title_en or self.title_native or "Unknown"
+        """Best English-facing title for display and storage.
+
+        AniList's ``romaji`` field for literature is a romanized *native*
+        title ("Kusuriya no Hitorigoto", "Sinui Tap"), which reads badly
+        in an English UI.  The English title is preferred whenever the
+        provider has one; romaji is only a fallback for entries that were
+        never given an English title.
+        """
+        return (
+            self.title_en
+            or self.title_romaji
+            or self.title
+            or self.title_native
+            or "Unknown"
+        )
 
 
 def normalize_literature(media: dict) -> LiteratureMetadata:
@@ -164,8 +179,11 @@ def normalize_literature(media: dict) -> LiteratureMetadata:
     cover_url = cover.get("large") or cover.get("medium") or ""
 
     return LiteratureMetadata(
-        title=romaji or english or native,
+        # Prefer the provider's English title; AniList's romaji field for
+        # literature is a romanized native title, not an English one.
+        title=english or romaji or native,
         title_en=english,
+        title_romaji=romaji,
         title_native=native,
         synonyms=list(media.get("synonyms") or []),
         category=category,

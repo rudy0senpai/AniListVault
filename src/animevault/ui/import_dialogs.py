@@ -37,12 +37,12 @@ def _bullets(parent, title: str, mapped: list, unmapped: list) -> QListWidget:
     return listing
 
 
-def run_xlsx_import_flow(parent, path: str, on_done: Optional[Callable] = None) -> None:
-    """Preview an XLSX, then import it if the user confirms."""
-    from animevault.services.importers.xlsx_preview import preview_xlsx
+def _run_tabular_import_flow(
+    parent, path: str, preview, source_label: str, on_done: Optional[Callable] = None
+) -> None:
+    """Shared preview + batch import for tabular files (XLSX and CSV)."""
     from animevault.services.importers.xlsx_importer import import_drafts
 
-    preview = preview_xlsx(path)
     if not preview.ok:
         QMessageBox.critical(parent, "Import Failed", preview.error)
         return
@@ -53,7 +53,7 @@ def run_xlsx_import_flow(parent, path: str, on_done: Optional[Callable] = None) 
     layout = QVBoxLayout(dialog)
 
     layout.addWidget(QLabel(f"<b>File:</b> {preview.path.name}"))
-    layout.addWidget(QLabel(f"<b>Sheet:</b> {preview.sheet_name}"))
+    layout.addWidget(QLabel(f"<b>{source_label}:</b> {preview.sheet_name}"))
     layout.addWidget(QLabel(f"<b>Rows detected:</b> {preview.total_rows}"))
     layout.addWidget(QLabel(preview.summary()))
 
@@ -136,6 +136,24 @@ def run_xlsx_import_flow(parent, path: str, on_done: Optional[Callable] = None) 
         QMessageBox.information(parent, "Import complete", message)
         if on_done is not None:
             on_done()
+
+
+def run_xlsx_import_flow(parent, path: str, on_done: Optional[Callable] = None) -> None:
+    """Preview an XLSX workbook, then import it if the user confirms."""
+    from animevault.services.importers.xlsx_preview import preview_xlsx
+
+    _run_tabular_import_flow(
+        parent, path, preview_xlsx(path), "Sheet", on_done=on_done
+    )
+
+
+def run_csv_import_flow(parent, path: str, on_done: Optional[Callable] = None) -> None:
+    """Preview a CSV file, then import it if the user confirms."""
+    from animevault.services.importers.csv_importer import preview_csv
+
+    _run_tabular_import_flow(
+        parent, path, preview_csv(path), "Format", on_done=on_done
+    )
 
 
 def run_sql_import_flow(parent, path: str, on_done: Optional[Callable] = None) -> None:

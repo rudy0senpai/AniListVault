@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import QSize, Qt, Signal
@@ -163,7 +164,12 @@ class MainWindow(QMainWindow):
         file_menu_btn.setObjectName("toolButton")
         menu = QMenu(file_menu_btn)
         import_xlsx = menu.addAction("Import Excel (.xlsx)…")
+        import_csv = menu.addAction("Import CSV (.csv)…")
         import_sql = menu.addAction("Import SQL Dump (.sql)…")
+        menu.addSeparator()
+        export_csv = menu.addAction("Export to CSV…")
+        export_xlsx = menu.addAction("Export to Excel (.xlsx)…")
+        export_sql = menu.addAction("Export to SQL Dump…")
         menu.addSeparator()
         backup_action = menu.addAction("Back Up Database")
         quit_action = menu.addAction("Quit")
@@ -191,9 +197,19 @@ class MainWindow(QMainWindow):
         upload_btn.setObjectName("toolButton")
         upload_menu = QMenu(upload_btn)
         upload_xlsx = upload_menu.addAction("Import Excel (.xlsx)…")
+        upload_csv = upload_menu.addAction("Import CSV (.csv)…")
         upload_sql = upload_menu.addAction("Import SQL Dump (.sql)…")
         upload_btn.setMenu(upload_menu)
         row.addWidget(upload_btn)
+
+        export_btn = QPushButton("⤓  Export")
+        export_btn.setObjectName("toolButton")
+        export_menu = QMenu(export_btn)
+        export_csv_btn = export_menu.addAction("Export to CSV…")
+        export_xlsx_btn = export_menu.addAction("Export to Excel (.xlsx)…")
+        export_sql_btn = export_menu.addAction("Export to SQL Dump…")
+        export_btn.setMenu(export_menu)
+        row.addWidget(export_btn)
 
         self._delete_button = QPushButton("🗑  Delete")
         self._delete_button.setObjectName("dangerButton")
@@ -217,8 +233,16 @@ class MainWindow(QMainWindow):
         # Connect menu actions
         for action in (import_xlsx, upload_xlsx):
             action.triggered.connect(self._on_import_xlsx)
+        for action in (import_csv, upload_csv):
+            action.triggered.connect(self._on_import_csv)
         for action in (import_sql, upload_sql):
             action.triggered.connect(self._on_import_sql)
+        for action in (export_csv, export_csv_btn):
+            action.triggered.connect(lambda: self._on_export("csv"))
+        for action in (export_xlsx, export_xlsx_btn):
+            action.triggered.connect(lambda: self._on_export("xlsx"))
+        for action in (export_sql, export_sql_btn):
+            action.triggered.connect(lambda: self._on_export("sql"))
         backup_action.triggered.connect(self._on_backup)
         quit_action.triggered.connect(self._quit)
         fetch_missing.triggered.connect(lambda: self._on_bulk_enrich(False))
@@ -551,6 +575,60 @@ class MainWindow(QMainWindow):
         )
         if path:
             self._run_sql_import(path)
+
+    def _on_import_csv(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Import CSV",
+            "",
+            "CSV Files (*.csv *.txt);;All Files (*)",
+        )
+        if path:
+            self._run_csv_import(path)
+
+    # ── Export ─────────────────────────────────────────────────────
+
+    def _on_export(self, fmt: str) -> None:
+        """Export the library to CSV, XLSX or a SQL dump."""
+        from animevault.services.importers.exporter import export_library
+
+        filters = {
+            "csv": "CSV Files (*.csv)",
+            "xlsx": "Excel Files (*.xlsx)",
+            "sql": "SQL Files (*.sql)",
+        }
+        default_ext = {"csv": "csv", "xlsx": "xlsx", "sql": "sql"}[fmt]
+        suggested = str(Path.home() / f"animevault-export.{default_ext}")
+
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            f"Export to {fmt.upper()}",
+            suggested,
+            filters.get(fmt, "All Files (*)"),
+        )
+        if not path:
+            return
+
+        # Ensure the extension matches the chosen format.
+        if not path.lower().endswith(f".{default_ext}"):
+            path = f"{path}.{default_ext}"
+
+        try:
+            result = export_library(path, fmt=fmt)
+        except Exception as exc:
+            QMessageBox.critical(self, "Export failed", str(exc))
+            return
+
+        QMessageBox.information(
+            self,
+            "Export complete",
+            f"Exported {result.row_count} record(s) to:\n{result.path}",
+        )
+
+    def _run_csv_import(self, path: str) -> None:
+        from animevault.ui.import_dialogs import run_csv_import_flow
+
+        run_csv_import_flow(self, path, on_done=self.library_changed.emit)
 
     def _run_xlsx_import(self, path: str) -> None:
         from animevault.ui.import_dialogs import run_xlsx_import_flow

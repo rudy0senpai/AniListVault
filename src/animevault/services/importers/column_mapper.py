@@ -48,6 +48,41 @@ FIELD_AIRED_FROM = "aired_from"
 FIELD_AIRED_TO = "aired_to"
 FIELD_POSTER_URL = "poster_url"
 
+# ── Literature fields ─────────────────────────────────────────────
+
+FIELD_CATEGORY = "category"
+FIELD_TITLE_NATIVE = "title_native"
+FIELD_CHAPTERS = "chapters"
+FIELD_CHAPTERS_READ = "chapters_read"
+FIELD_VOLUMES = "volumes"
+FIELD_AUTHORS = "authors"
+FIELD_ARTISTS = "artists"
+FIELD_SERIALIZATION = "serialization"
+FIELD_PUB_STATUS = "pub_status"
+FIELD_ORIGIN_COUNTRY = "origin_country"
+FIELD_STARTED_AT = "started_at"
+FIELD_ENDED_AT = "ended_at"
+FIELD_SYNONYMS = "synonyms"
+
+#: Fields that only apply to manga / manhwa / manhua.
+LITERATURE_FIELDS = frozenset(
+    {
+        FIELD_CATEGORY,
+        FIELD_TITLE_NATIVE,
+        FIELD_CHAPTERS,
+        FIELD_CHAPTERS_READ,
+        FIELD_VOLUMES,
+        FIELD_AUTHORS,
+        FIELD_ARTISTS,
+        FIELD_SERIALIZATION,
+        FIELD_PUB_STATUS,
+        FIELD_ORIGIN_COUNTRY,
+        FIELD_STARTED_AT,
+        FIELD_ENDED_AT,
+        FIELD_SYNONYMS,
+    }
+)
+
 #: Personal fields the user owns — import must never silently invent these.
 PERSONAL_FIELDS = frozenset(
     {
@@ -151,6 +186,39 @@ _ALIASES: dict[str, tuple[str, ...]] = {
     ),
     FIELD_AIRED_TO: ("last aired", "aired to", "aired_to", "finale", "aired end"),
     FIELD_POSTER_URL: ("poster", "poster url", "cover", "cover url", "image", "image url"),
+    FIELD_CATEGORY: (
+        "media type", "category", "type", "kind", "media category",
+        "library type", "format type",
+    ),
+    FIELD_TITLE_NATIVE: (
+        "native title", "original title", "native name", "title native",
+        "korean title", "chinese title", "japanese title native",
+    ),
+    FIELD_CHAPTERS: (
+        "chapters", "total chapters", "chapter count", "total ch",
+        "ch", "chapter_count", "num chapters",
+    ),
+    FIELD_CHAPTERS_READ: (
+        "chapters read", "read chapters", "chapters seen", "ch read",
+        "chapters completed", "progress read",
+    ),
+    FIELD_VOLUMES: ("volumes", "total volumes", "volume count", "vol", "vols"),
+    FIELD_AUTHORS: ("author", "authors", "writer", "written by", "story"),
+    FIELD_ARTISTS: ("artist", "artists", "illustrator", "drawn by", "art"),
+    FIELD_SERIALIZATION: ("serialization", "serialised in", "serialized in", "magazine"),
+    FIELD_PUB_STATUS: (
+        "publication status", "pub status", "publishing status",
+        "release status", "serialization status",
+    ),
+    FIELD_ORIGIN_COUNTRY: ("origin", "country", "country of origin", "origin country"),
+    FIELD_STARTED_AT: (
+        "start date", "started", "started at", "publication start", "published",
+    ),
+    FIELD_ENDED_AT: ("end date", "ended", "ended at", "publication end"),
+    FIELD_SYNONYMS: (
+        "alternate titles", "alt titles", "synonyms", "other titles",
+        "alternative titles",
+    ),
 }
 
 def normalize_header(raw: object) -> str:

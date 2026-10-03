@@ -318,6 +318,11 @@ def _import_one(
     result: ImportResult,
     collect_enrichment: bool,
 ) -> None:
+    # Literature rows go to their own model, not the anime table.
+    if draft.is_literature:
+        _import_literature(draft, policy, result, collect_enrichment)
+        return
+
     existing = _find_existing(draft)
     if existing is None:
         anime = Anime(
@@ -367,4 +372,109 @@ def _import_one(
     else:
         result.stats.duplicates += 1
     if collect_enrichment and _needs_enrichment(existing):
+        result.needs_enrichment.append(existing.id)
+
+
+def _import_literature(
+    draft: AnimeDraft,
+    policy: str,
+    result: ImportResult,
+    collect_enrichment: bool,
+) -> None:
+    """Persist a manga / manhwa / manhua draft."""
+    from animevault.models.literature import Literature
+
+    existing = None
+    if any(
+        v is not None
+        for v in (draft.anilist_id, draft.mal_id, draft.kitsu_id)
+    ):
+        existing = Literature.find_by_provider_id(
+            anilist_id=draft.anilist_id,
+            kitsu_id=draft.kitsu_id,
+            mal_id=draft.mal_id,
+        )
+    if existing is None:
+        existing = Literature.find_by_title(draft.title, draft.category)
+
+    if existing is None:
+        item = Literature(
+            id=None,
+            title=draft.title,
+            category=draft.category,
+            status=draft.status if draft.status != "plan_to_watch" else "watching",
+            tier=draft.tier,
+            rewatches=draft.rewatches,
+            chapters_read=draft.chapters_read,
+            chapters=draft.chapters,
+            volumes=draft.volumes,
+            favorite=draft.favorite,
+            notes=draft.notes,
+            first_read=draft.first_watched,
+            last_read=draft.last_watched,
+            completed_date=draft.completed_date,
+            privacy=draft.privacy,
+            title_native=draft.title_native,
+            synonyms=list(draft.synonyms),
+            format=draft.media_type,
+            synopsis=draft.synopsis,
+            genres=list(draft.genres),
+            authors=list(draft.authors),
+            artists=list(draft.artists),
+            serialization=draft.serialization,
+            pub_status=draft.pub_status,
+            origin_country=draft.origin_country,
+            started_at=draft.started_at,
+            ended_at=draft.ended_at,
+            anilist_id=draft.anilist_id,
+            kitsu_id=draft.kitsu_id,
+            mal_id=draft.mal_id,
+            source_provider="import",
+        )
+        item.save()
+        result.stats.added += 1
+        result.added_ids.append(item.id)
+        if collect_enrichment and not (item.anilist_id or item.mal_id):
+            result.needs_enrichment.append(item.id)
+        return
+
+    changed = False
+
+    def _set(attr, incoming, is_empty) -> None:
+        nonlocal changed
+        if incoming is None:
+            return
+        current = getattr(existing, attr)
+        if policy == POLICY_KEEP_EXISTING:
+            return
+        if policy == POLICY_FILL_EMPTY and not is_empty(current):
+            return
+        if current != incoming:
+            setattr(existing, attr, incoming)
+            changed = True
+
+    _set("tier", draft.tier, lambda v: not v)
+    _set("notes", draft.notes, lambda v: not v)
+    _set("favorite", draft.favorite, lambda v: not v)
+    _set("rewatches", draft.rewatches, lambda v: not v)
+    _set("chapters", draft.chapters, lambda v: not v)
+    _set("chapters_read", draft.chapters_read, lambda v: not v)
+    _set("volumes", draft.volumes, lambda v: not v)
+    _set("synopsis", draft.synopsis or None, lambda v: not v)
+    _set("genres", draft.genres or None, lambda v: not v)
+    _set("authors", draft.authors or None, lambda v: not v)
+    _set("title_native", draft.title_native, lambda v: not v)
+    for attr in ("anilist_id", "kitsu_id", "mal_id"):
+        incoming = getattr(draft, attr)
+        if incoming is not None and getattr(existing, attr) is None:
+            setattr(existing, attr, incoming)
+            changed = True
+
+    if changed:
+        existing.save()
+        result.stats.updated += 1
+        result.updated_ids.append(existing.id)
+    else:
+        result.stats.duplicates += 1
+    if collect_enrichment and not (existing.anilist_id or existing.mal_id):
         result.needs_enrichment.append(existing.id)

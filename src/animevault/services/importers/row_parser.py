@@ -10,13 +10,20 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from animevault.media_types import normalize_category
 from animevault.models.anime import VALID_STATUSES
 from animevault.services.importers.column_mapper import (
     FIELD_AIRING_STATUS,
     FIELD_ANIDB_ID,
     FIELD_ANILIST_ID,
+    FIELD_ARTISTS,
+    FIELD_AUTHORS,
+    FIELD_CATEGORY,
+    FIELD_CHAPTERS,
+    FIELD_CHAPTERS_READ,
     FIELD_COMPLETED_DATE,
     FIELD_DURATION,
+    FIELD_ENDED_AT,
     FIELD_EPISODES,
     FIELD_EPISODES_WATCHED,
     FIELD_FAVORITE,
@@ -27,19 +34,26 @@ from animevault.services.importers.column_mapper import (
     FIELD_MAL_ID,
     FIELD_MEDIA_TYPE,
     FIELD_NOTES,
+    FIELD_ORIGIN_COUNTRY,
     FIELD_POSTER_URL,
     FIELD_PRIVACY,
+    FIELD_PUB_STATUS,
     FIELD_REWATCHES,
     FIELD_SEASON,
     FIELD_SEASON_YEAR,
+    FIELD_SERIALIZATION,
+    FIELD_STARTED_AT,
     FIELD_STATUS,
     FIELD_STUDIOS,
+    FIELD_SYNONYMS,
     FIELD_SYNOPSIS,
     FIELD_TIER,
     FIELD_TITLE,
     FIELD_TITLE_EN,
     FIELD_TITLE_JA,
+    FIELD_TITLE_NATIVE,
     FIELD_TMDB_ID,
+    FIELD_VOLUMES,
     MappingReport,
 )
 from animevault.tiers import InvalidTierError, normalize_tier
@@ -138,6 +152,28 @@ class AnimeDraft:
     kitsu_id: Optional[str] = None
     tmdb_id: Optional[int] = None
     anidb_id: Optional[int] = None
+
+    # Literature (manga / manhwa / manhua)
+    category: str = ""
+    title_native: str = ""
+    synonyms: list[str] = field(default_factory=list)
+    chapters: int = 0
+    chapters_read: int = 0
+    volumes: int = 0
+    authors: list[str] = field(default_factory=list)
+    artists: list[str] = field(default_factory=list)
+    serialization: str = ""
+    pub_status: str = ""
+    origin_country: str = ""
+    started_at: str = ""
+    ended_at: str = ""
+
+    @property
+    def is_literature(self) -> bool:
+        """Whether this row describes a comic rather than an anime."""
+        from animevault.media_types import is_literature as _is_lit
+
+        return bool(self.category) and _is_lit(self.category)
 
     def dedupe_key(self) -> str:
         """Identity used for in-file duplicate detection."""
@@ -375,6 +411,26 @@ def parse_rows(
         draft.kitsu_id = _to_text(cell(FIELD_KITSU_ID)) or None
         draft.tmdb_id = _to_optional_int(cell(FIELD_TMDB_ID))
         draft.anidb_id = _to_optional_int(cell(FIELD_ANIDB_ID))
+
+        # ── Literature ────────────────────────────────────────────
+        draft.category = normalize_category(cell(FIELD_CATEGORY))
+        draft.title_native = _to_text(cell(FIELD_TITLE_NATIVE))
+        draft.synonyms = _to_list(cell(FIELD_SYNONYMS))
+        draft.chapters = _to_int(cell(FIELD_CHAPTERS))
+        draft.chapters_read = _to_int(cell(FIELD_CHAPTERS_READ))
+        draft.volumes = _to_int(cell(FIELD_VOLUMES))
+        draft.authors = _to_list(cell(FIELD_AUTHORS))
+        draft.artists = _to_list(cell(FIELD_ARTISTS))
+        draft.serialization = _to_text(cell(FIELD_SERIALIZATION))
+        draft.pub_status = _to_text(cell(FIELD_PUB_STATUS)).upper()
+        draft.origin_country = _to_text(cell(FIELD_ORIGIN_COUNTRY)).upper()
+        draft.started_at = _to_text(cell(FIELD_STARTED_AT))
+        draft.ended_at = _to_text(cell(FIELD_ENDED_AT))
+
+        # An unset category means anime; a spreadsheet row only becomes
+        # literature when it explicitly says so.
+        if not _to_text(cell(FIELD_CATEGORY)):
+            draft.category = ""
 
         result.drafts.append(draft)
 
