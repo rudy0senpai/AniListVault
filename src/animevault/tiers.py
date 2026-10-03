@@ -73,12 +73,13 @@ def normalize_tier(value: object) -> Optional[str]:
 
 
 def is_valid_tier(value: object) -> bool:
-    """Return True when *value* normalizes to a canonical tier."""
+    """Return True when *value* is a canonical tier (not "unassigned")."""
+    if value is None:
+        return False
     try:
-        normalize_tier(value)
+        return normalize_tier(value) is not None
     except InvalidTierError:
         return False
-    return True
 
 
 def tier_sort_key(tier: Optional[str]) -> tuple:

@@ -36,12 +36,28 @@ class TestInitializeDatabase:
         assert info.version == SCHEMA_VERSION
 
     def test_anime_table_has_expected_columns(self, db_conn: sqlite3.Connection):
-        """The anime table must have the required columns."""
+        """The anime table must have the required columns.
+
+        The v2 tier migration adds the personal tier and tracking fields
+        on top of the original set; every one must be present.
+        """
         cursor = db_conn.execute("PRAGMA table_info(anime)")
         columns = {row["name"]: row for row in cursor.fetchall()}
 
-        expected = {"id", "title", "title_ja", "episodes", "status", "score", "notes"}
-        assert expected == set(columns.keys()), f"Missing columns: {expected - set(columns.keys())}"
+        expected = {
+            "id", "title", "title_ja", "episodes", "status", "score", "notes",
+            "tier", "rewatches", "episodes_watched", "favorite",
+            "first_watched", "last_watched", "completed_date", "privacy",
+        }
+        assert expected == set(columns.keys()), (
+            f"Missing columns: {expected - set(columns.keys())}"
+        )
+
+    def test_legacy_score_column_retained(self, db_conn: sqlite3.Connection):
+        """The legacy score column must survive the tier migration."""
+        cursor = db_conn.execute("PRAGMA table_info(anime)")
+        columns = {row["name"] for row in cursor.fetchall()}
+        assert "score" in columns
 
     def test_anime_primary_key(self, db_conn: sqlite3.Connection):
         """id must be the primary key with autoincrement."""
@@ -101,13 +117,33 @@ class TestInitializeDatabase:
         assert "idx_anime_status" in indexes
 
     def test_meta_table_stores_schema_version(self, db_conn: sqlite3.Connection):
-        """The meta table should record the schema version."""
+        """The meta table should record the fully migrated schema version."""
+        from animevault.migration import TARGET_SCHEMA_VERSION
+
         cursor = db_conn.execute(
             "SELECT value FROM meta WHERE key = 'schema_version'"
         )
         row = cursor.fetchone()
         assert row is not None
-        assert row["value"] == str(SCHEMA_VERSION)
+        assert int(row["value"]) == TARGET_SCHEMA_VERSION
+
+    def test_literature_tables_created_by_migration(self, db_conn: sqlite3.Connection):
+        """The v3 migration must add first-class literature tables."""
+        cursor = db_conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = {row["name"] for row in cursor.fetchall()}
+        assert "literature" in tables
+        assert "literature_metadata" in tables
+
+    def test_literature_has_chapter_columns(self, db_conn: sqlite3.Connection):
+        """Literature rows track chapters, not episodes."""
+        cursor = db_conn.execute("PRAGMA table_info(literature)")
+        columns = {row["name"] for row in cursor.fetchall()}
+        assert {"chapters", "chapters_read", "volumes", "category"} <= columns
+
+    def test_literature_has_tier_and_personal_fields(self, db_conn: sqlite3.Connection):
+        cursor = db_conn.execute("PRAGMA table_info(literature)")
+        columns = {row["name"] for row in cursor.fetchall()}
+        assert {"tier", "status", "favorite", "notes"} <= columns
 
     def test_idempotent_init(self, tmp_path):
         """Calling initialize_database twice should not error."""

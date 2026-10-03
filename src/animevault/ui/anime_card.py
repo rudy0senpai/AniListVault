@@ -90,7 +90,11 @@ class AnimeCard(QFrame):
         title_label = QLabel(self._anime.title)
         title_font = title_label.font()
         title_font.setBold(True)
-        title_font.setPointSize(title_font.pointSize() + 1)
+        # pointSize() is -1 when the font is sized in pixels; bumping it
+        # would ask Qt for an invalid size, so only adjust real point sizes.
+        current = title_font.pointSize()
+        if current > 0:
+            title_font.setPointSize(current + 1)
         title_label.setFont(title_font)
         title_label.setObjectName("card-title")
 

@@ -8,3 +8,11 @@ build/
 .claude/
 *.qss
 .env
+
+# pip's default install target when it falls back to the project root
+# (used because the project .venv is not runnable on this machine).
+/Lib/
+/Scripts/
+
+# Local scratch + launcher, not part of the application.
+/scratch/

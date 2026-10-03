@@ -19,6 +19,13 @@ def create_app() -> QApplication:
     app = QApplication.instance()
     if app is None:
         app = QApplication([])
+        app.setApplicationName("AnimeVault")
+        app.setOrganizationName("AnimeVault")
+
+    # Apply the dark visual theme.
+    from animevault.ui.theme import build_stylesheet
+
+    app.setStyleSheet(build_stylesheet())
 
     # Make sure the database and schema exist before the first window
     # is shown, then bring the schema up to the current version.

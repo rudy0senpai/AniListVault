@@ -1,11 +1,15 @@
 """Schema and data migrations.
 
-Migrations are **additive and non-destructive**: new columns are added,
-the legacy ``score`` column is retained for backward compatibility, and no
-user data is destroyed.  Each migration bumps ``meta.schema_version``.
+Migrations are **additive and non-destructive**: new columns and tables are
+added, the legacy ``score`` column is retained for backward compatibility,
+and no user data is destroyed.  Each migration bumps ``meta.schema_version``.
 
 The score → tier conversion is *never* automatic; see
 :func:`migrate_scores_to_tiers`.
+
+v2 — personal tier system (anime).
+v3 — literature (manga / manhwa / manhua) support, in its own table so
+    the existing anime rows, tiers and poster paths are untouched.
 """
 
 from __future__ import annotations
@@ -14,7 +18,7 @@ import datetime
 import logging
 import shutil
 import sqlite3
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -23,7 +27,7 @@ from animevault.tiers import DEFAULT_SCORE_TO_TIER, score_to_tier
 
 logger = logging.getLogger(__name__)
 
-TARGET_SCHEMA_VERSION = 2
+TARGET_SCHEMA_VERSION = 3
 
 
 # ── Helpers ───────────────────────────────────────────────────────
@@ -69,11 +73,11 @@ def _set_schema_version(conn: sqlite3.Connection, version: int) -> None:
 # ── Backup ────────────────────────────────────────────────────────
 
 def backup_database(suffix: Optional[str] = None) -> Optional[Path]:
-    """Copy the live database file next to itself with a timestamp suffix.
+    """Copy the live database next to itself with a timestamp suffix.
 
-    Returns the backup path, or ``None`` when there is no database file
-    yet.  Uses SQLite's online backup API when possible so a WAL database
-    is captured consistently.
+    Uses SQLite's online backup API so a WAL database is captured
+    consistently.  Returns the backup path, or ``None`` when there is no
+    database file yet.
     """
     src = database_path()
     if not src.exists():
@@ -91,7 +95,6 @@ def backup_database(suffix: Optional[str] = None) -> Optional[Path]:
             dest_conn.close()
             src_conn.close()
     except Exception:
-        # Fall back to a plain file copy if the backup API is unavailable.
         try:
             shutil.copy2(src, dest)
         except Exception as exc:  # pragma: no cover - defensive
@@ -118,18 +121,11 @@ def _add_column_if_missing(
 def migrate_to_v2(conn: sqlite3.Connection) -> bool:
     """v1 → v2: introduce the personal tier and its supporting fields.
 
-    Adds to ``anime``: ``tier`` plus the personal tracking columns the
-    tier system needs (rewatches, favorite, watched-episode progress and
-    watch dates).
-
     The legacy ``score`` column is intentionally **kept** so old data and
     old backups remain readable.
     """
     changed = False
-
-    # Personal evaluation — the new primary ranking.
     changed |= _add_column_if_missing(conn, "anime", "tier", "TEXT")
-    # Personal tracking fields.
     changed |= _add_column_if_missing(conn, "anime", "rewatches", "INTEGER DEFAULT 0")
     changed |= _add_column_if_missing(conn, "anime", "episodes_watched", "INTEGER DEFAULT 0")
     changed |= _add_column_if_missing(conn, "anime", "favorite", "INTEGER DEFAULT 0")
@@ -137,15 +133,79 @@ def migrate_to_v2(conn: sqlite3.Connection) -> bool:
     changed |= _add_column_if_missing(conn, "anime", "last_watched", "TEXT DEFAULT ''")
     changed |= _add_column_if_missing(conn, "anime", "completed_date", "TEXT DEFAULT ''")
     changed |= _add_column_if_missing(conn, "anime", "privacy", "TEXT DEFAULT 'public'")
-
-    # Provider ID kept alongside, for import matching.
     changed |= _add_column_if_missing(conn, "anime_metadata", "anidb_id", "INTEGER")
-
     return changed
+
+
+# Literature lives in its own table: no anime row is touched, so the
+# migration cannot endanger existing data, tiers or poster paths.
+_LITERATURE_SQL = """
+CREATE TABLE IF NOT EXISTS literature (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    category         TEXT    NOT NULL DEFAULT 'manga',
+    title            TEXT    NOT NULL,
+    title_native     TEXT    DEFAULT '',
+    synonyms         TEXT    DEFAULT '',
+    format           TEXT    DEFAULT '',
+    status           TEXT    NOT NULL DEFAULT 'watching',
+    tier             TEXT,
+    rewatches        INTEGER DEFAULT 0,
+    chapters_read    INTEGER DEFAULT 0,
+    chapters         INTEGER DEFAULT 0,
+    volumes          INTEGER DEFAULT 0,
+    volumes_read     INTEGER DEFAULT 0,
+    favorite         INTEGER DEFAULT 0,
+    notes            TEXT    DEFAULT '',
+    first_read       TEXT    DEFAULT '',
+    last_read        TEXT    DEFAULT '',
+    completed_date   TEXT    DEFAULT '',
+    privacy          TEXT    DEFAULT 'public',
+    origin_country   TEXT    DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS literature_metadata (
+    literature_id     INTEGER PRIMARY KEY,
+    title_en          TEXT DEFAULT '',
+    synopsis          TEXT DEFAULT '',
+    genres            TEXT DEFAULT '',
+    authors           TEXT DEFAULT '',
+    artists           TEXT DEFAULT '',
+    serialization     TEXT DEFAULT '',
+    pub_status        TEXT DEFAULT '',
+    started_at        TEXT DEFAULT '',
+    ended_at          TEXT DEFAULT '',
+    cover_url         TEXT DEFAULT '',
+    cover_path        TEXT DEFAULT '',
+    anilist_id        INTEGER,
+    kitsu_id          TEXT DEFAULT '',
+    mal_id            INTEGER,
+    source_provider   TEXT DEFAULT '',
+    metadata_fetched_at TEXT DEFAULT '',
+    FOREIGN KEY (literature_id) REFERENCES literature(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_lit_category ON literature(category);
+CREATE INDEX IF NOT EXISTS idx_lit_tier ON literature(tier);
+CREATE INDEX IF NOT EXISTS idx_lit_title ON literature(title);
+CREATE INDEX IF NOT EXISTS idx_lit_anilist ON literature_metadata(anilist_id);
+"""
+
+
+def migrate_to_v3(conn: sqlite3.Connection) -> bool:
+    """v2 → v3: add first-class Manga / Manhwa / Manhua support.
+
+    Creates the ``literature`` and ``literature_metadata`` tables.  Purely
+    additive: the ``anime`` table is not altered, so existing anime,
+    tiers, notes and poster paths are preserved by construction.
+    """
+    conn.executescript(_LITERATURE_SQL)
+    logger.info("Literature tables created (manga / manhwa / manhua)")
+    return True
 
 
 _MIGRATIONS = {
     2: migrate_to_v2,
+    3: migrate_to_v3,
 }
 
 
@@ -202,8 +262,7 @@ def migrate_scores_to_tiers(
     Records that already have a tier are left alone unless
     *overwrite_existing* is true.  Records without a score are skipped.
 
-    This function is never invoked by ``initialize_database`` or
-    ``run_migrations``; the user must ask for the conversion.
+    Never invoked by ``initialize_database`` or ``run_migrations``.
     """
     result = ScoreConversionResult()
     table = DEFAULT_SCORE_TO_TIER if mapping is None else mapping
@@ -245,7 +304,7 @@ def migrate_scores_to_tiers(
 
 
 def unassigned_tier_count() -> int:
-    """Count records with no tier assigned."""
+    """Count anime with no tier assigned."""
     with get_connection() as conn:
         if "tier" not in _column_names(conn, "anime"):
             return 0
@@ -256,7 +315,7 @@ def unassigned_tier_count() -> int:
 
 
 def legacy_score_count() -> int:
-    """Count records that still carry a legacy numeric score."""
+    """Count anime that still carry a legacy numeric score."""
     with get_connection() as conn:
         if "score" not in _column_names(conn, "anime"):
             return 0

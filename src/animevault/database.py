@@ -29,7 +29,12 @@ def database_path() -> Path:
 
 # ── Schema ───────────────────────────────────────────────────────
 
-SCHEMA_VERSION = 1
+#: Version of the schema this module creates directly.  Further versions
+#: are applied by :mod:`animevault.migration`.
+BASE_SCHEMA_VERSION = 1
+
+#: Backwards-compatible alias.
+SCHEMA_VERSION = BASE_SCHEMA_VERSION
 
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS anime (
@@ -145,12 +150,16 @@ def initialize_database(path: Path | None = None) -> SchemaInfo:
     try:
         conn.execute("PRAGMA foreign_keys=ON;")
         conn.executescript(_SCHEMA_SQL)
+        # This records the *base* schema version only.  Later versions are
+        # applied by animevault.migration.run_migrations(), so stamping the
+        # final target here would make the migrations appear already-run
+        # and silently skip them.
         conn.execute(
             "INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', ?);",
-            (str(SCHEMA_VERSION),),
+            (str(BASE_SCHEMA_VERSION),),
         )
         conn.commit()
     finally:
         conn.close()
 
-    return SchemaInfo(path=db_path, version=SCHEMA_VERSION)
+    return SchemaInfo(path=db_path, version=BASE_SCHEMA_VERSION)

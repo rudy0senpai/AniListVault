@@ -28,6 +28,12 @@ def isolated_database(tmp_path: Path, monkeypatch):
     set_database_path(db_file)
     initialize_database(db_file)
 
+    # Bring the schema to the current version so tests exercise the real
+    # columns (tier, rewatches, literature tables, …).
+    from animevault.migration import run_migrations
+
+    run_migrations()
+
     yield db_file
 
     # Clean up thread-local connection after test
@@ -43,3 +49,13 @@ def db_conn(isolated_database: Path) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     yield conn
     conn.close()
+
+
+@pytest.fixture
+def migrated_database(isolated_database: Path):
+    """Isolated database with all schema migrations applied.
+
+    ``isolated_database`` already migrates, so this is an explicit alias
+    for tests that want to state that dependency.
+    """
+    return isolated_database
