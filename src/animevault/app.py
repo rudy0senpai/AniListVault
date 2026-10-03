@@ -5,6 +5,7 @@ from __future__ import annotations
 from PySide6.QtWidgets import QApplication
 
 from animevault.database import initialize_database
+from animevault.migration import run_migrations
 
 
 def create_app() -> QApplication:
@@ -20,7 +21,8 @@ def create_app() -> QApplication:
         app = QApplication([])
 
     # Make sure the database and schema exist before the first window
-    # is shown.
+    # is shown, then bring the schema up to the current version.
     initialize_database()
+    run_migrations()
 
     return app

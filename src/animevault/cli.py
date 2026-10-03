@@ -9,6 +9,7 @@ from PySide6.QtWidgets import QApplication
 from animevault.app import create_app
 from animevault.database import initialize_database
 from animevault.main_window import MainWindow
+from animevault.migration import run_migrations
 
 
 def main() -> int:
@@ -20,6 +21,7 @@ def main() -> int:
         Process exit code (0 on normal exit).
     """
     initialize_database()
+    run_migrations()
 
     app = create_app()
 
