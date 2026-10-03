@@ -296,6 +296,8 @@ QProgressBar::chunk {{
 
 /* ── Scrollbars ─────────────────────────────────────────── */
 QScrollArea {{ background: transparent; border: none; }}
+/* Let the window's video background show through the card area. */
+#gridHost {{ background: transparent; }}
 QScrollBar:vertical {{
     background: transparent;
     width: 10px;

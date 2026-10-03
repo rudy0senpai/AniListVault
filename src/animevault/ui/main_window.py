@@ -40,6 +40,8 @@ from animevault.ui.details_dialog import DetailsDialog
 from animevault.ui.add_media_dialog import AddMediaDialog
 from animevault.ui.overview_panel import OverviewPanel
 from animevault.ui.theme import TEXT_MUTED, TEXT_SECONDARY
+from animevault.ui.video_background import DEFAULT_OPACITY as BACKGROUND_OPACITY
+from animevault.ui.video_background import VideoBackground
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +94,11 @@ class MainWindow(QMainWindow):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
+        # Looping video background sits behind everything and ignores input.
+        self._background = VideoBackground(central, opacity=BACKGROUND_OPACITY)
+        self._background.setGeometry(central.rect())
+        self._background.raise_()
+
         outer.addWidget(self._build_header())
         outer.addWidget(self._build_toolbar())
         outer.addWidget(self._build_search_row())
@@ -108,6 +115,22 @@ class MainWindow(QMainWindow):
         body.addWidget(self._overview)
 
         outer.addLayout(body, 1)
+
+        # Keep the background sized to the window, and behind the content.
+        self._background.lower()
+        central.installEventFilter(self)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        background = getattr(self, "_background", None)
+        if background is not None:
+            background.setGeometry(self.centralWidget().rect())
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        background = getattr(self, "_background", None)
+        if background is not None:
+            background.shutdown()
+        super().closeEvent(event)
 
     def _build_header(self) -> QWidget:
         header = QWidget()

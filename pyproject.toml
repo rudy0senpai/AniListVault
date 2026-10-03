@@ -24,8 +24,13 @@ dev = [
 [project.scripts]
 animevault = "animevault.cli:main"
 
+# Windowed entry point used by the frozen Windows build.
+[project.gui-scripts]
+animevault-gui = "animevault.cli:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
