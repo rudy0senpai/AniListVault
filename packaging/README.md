@@ -69,3 +69,30 @@ destroys it:
 - Build on Windows — PyInstaller does not cross-compile.
 - `packaging/AnimeVault.iss` is kept for anyone who prefers Inno Setup;
   it is not required.
+
+## Repairing an older install
+
+Installers built before the uninstall fix shipped an `uninstall.exe` that
+was a copy of the installer itself, and left `UninstallString` empty —
+so **Uninstall** either did nothing or re-installed the app.
+
+To fix an existing installation without reinstalling:
+
+```powershell
+.\packaging\repair_uninstall.ps1
+```
+
+It installs the real uninstaller and rewrites the registry entry.
+After running it, **Windows Settings → Apps → Installed apps →
+AnimeVault → Uninstall** works normally.
+
+## Files
+
+| File | Purpose |
+|---|---|
+| `build_windows.ps1` | Freezes the app with PyInstaller |
+| `build_installer.py` | Builds the self-extracting setup and the uninstaller |
+| `uninstaller.py` | Source for `uninstall.exe` |
+| `repair_uninstall.ps1` | Fixes the uninstall entry on an older install |
+| `uninstall.ps1` | Remove the app; `-PurgeData` also deletes the library |
+| `AnimeVault.iss` | Optional Inno Setup route (not required) |

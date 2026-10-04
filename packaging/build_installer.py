@@ -69,10 +69,19 @@ def uninstall_cmd():
         'cmd.exe /c ""{pythonw}" "{cleanup}" --uninstall"'
     )
 
-def register_uninstall(install_dir, cleanup_script):
-    """Register with Windows so it appears in Apps & features."""
+def register_uninstall(install_dir):
+    """Register with Windows so it appears in Apps & features.
+
+    Windows treats an entry as removable only when *both* UninstallString
+    and QuietUninstallString are present; setting just the first leaves the
+    entry greyed out with no working Uninstall button.
+    """
     import winreg
     key_path = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\AnimeVault"
+    uninstaller = os.path.join(install_dir, "uninstall.exe")
+    if not os.path.isfile(uninstaller):
+        msg("Warning: uninstall.exe is missing, so Windows may not offer "
+            "an Uninstall option.\n\nReinstall AnimeVault to restore it.")
     try:
         with winreg.CreateKey(winreg.HKEY_CURRENT_USER, key_path) as k:
             winreg.SetValueEx(k, "DisplayName", 0, winreg.REG_SZ, APP_NAME)
@@ -83,9 +92,12 @@ def register_uninstall(install_dir, cleanup_script):
             winreg.SetValueEx(k, "InstallLocation", 0, winreg.REG_SZ, install_dir)
             winreg.SetValueEx(k, "NoModify", 0, winreg.DWORD, 1)
             winreg.SetValueEx(k, "NoRepair", 0, winreg.DWORD, 1)
-            winreg.SetValueEx(k, "EstimatedSize", 0, winreg.DWORD, 0)
+            winreg.SetValueEx(k, "SystemComponent", 0, winreg.DWORD, 0)
+            winreg.SetValueEx(k, "InstallState", 0, winreg.DWORD, 1)
             winreg.SetValueEx(k, "UninstallString", 0, winreg.REG_SZ,
-                              '"' + os.path.join(install_dir, "uninstall.exe") + '"')
+                              '"' + uninstaller + '"')
+            winreg.SetValueEx(k, "QuietUninstallString", 0, winreg.REG_SZ,
+                              '"' + uninstaller + '" /S')
     except Exception as e:
         msg("Installed, but could not register the uninstaller:\n%s" % e)
 
@@ -151,17 +163,14 @@ def main():
 
     shutil.rmtree(tmp, ignore_errors=True)
 
-    # A real uninstaller: the same stub, told to clean up.
-    uninst = os.path.join(install_dir, "uninstall.exe")
-    try:
-        shutil.copy(sys.executable if os.path.isfile(sys.executable) else "", uninst)
-    except Exception:
-        pass
-    _write_cleanup_script(install_dir)
+    # The uninstaller is a genuinely separate executable built from
+    # packaging/uninstaller.py.  Copying the installer here would only
+    # re-install the app when the user asked to remove it.
+    _install_uninstaller(install_dir)
 
     desktop = os.path.join(os.path.expanduser("~"), "Desktop")
     make_shortcuts(install_dir, os.path.isdir(desktop))
-    register_uninstall(install_dir, os.path.join(install_dir, "cleanup.py"))
+    register_uninstall(install_dir)
 
     msg("%s installed.\n\nIt will start now." % APP_NAME)
     try:
@@ -169,31 +178,47 @@ def main():
     except Exception as e:
         msg("Installed, but could not start automatically:\n%s" % e)
         msg("Run:\n%s" % exe)
+        '''
 
-def _write_cleanup_script(install_dir):
-    """Create the uninstall helper the shortcut points at."""
-    script = os.path.join(install_dir, "cleanup.py")
-    code = (
-        "import os, shutil, sys\n"
-        "d = os.path.dirname(os.path.abspath(__file__))\n"
-        "data = os.path.join(os.environ.get('APPDATA', ''), 'AnimeVault')\n"
-        "shutil.rmtree(d, ignore_errors=True)\n"
-        "try:\n"
-        "    import winreg\n"
-        "    winreg.DeleteKey(winreg.HKEY_CURRENT_USER,\n"
-        "        r'Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\AnimeVault')\n"
-        "except Exception:\n"
-        "    pass\n"
-        "print('AnimeVault removed. Library kept at', data)\n"
-    )
-    with open(script, "w") as f:
-        f.write(code)
 
-if __name__ == "__main__":
-    if "--uninstall" in sys.argv:
-        _write_cleanup_script = None  # not used in cleanup mode
-    main()
-'''
+
+
+def build_uninstaller() -> Path:
+    """Compile the standalone uninstaller and return its path.
+
+    Built as a console app so it works when launched from the Windows
+    Settings uninstall button with no console of its own.
+    """
+    source = ROOT / "packaging" / "uninstaller.py"
+    if not source.exists():
+        raise SystemExit(f"Uninstaller source missing: {source}")
+
+    cmd = [
+        sys.executable, "-m", "PyInstaller",
+        "--noconfirm", "--clean", "--onefile", "--console",
+        "--name", "uninstall",
+        "--icon", str(ICON),
+        "--exclude-module", "PySide6",
+        "--exclude-module", "animevault",
+        str(source),
+    ]
+    rc = subprocess.call(cmd, cwd=str(ROOT))
+    built = ROOT / "dist" / "uninstall.exe"
+    if rc != 0 or not built.exists():
+        raise SystemExit("Could not build the uninstaller.")
+    return built
+
+
+def _install_uninstaller(install_dir: str) -> None:
+    """Copy the compiled uninstaller into the install folder."""
+    source = build_uninstaller()
+    target = os.path.join(install_dir, "uninstall.exe")
+    try:
+        shutil.copy(source, target)
+        print(f"  uninstaller: {target} "
+              f"({os.path.getsize(target) / 1024:.0f} KB)")
+    except Exception as exc:
+        raise SystemExit(f"Could not install the uninstaller: {exc}")
 
 
 def build() -> int:
