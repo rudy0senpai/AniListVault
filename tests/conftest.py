@@ -21,9 +21,7 @@ def isolated_database(tmp_path: Path, monkeypatch):
     # Clear any cached thread-local connection so a fresh one is created.
     import animevault.database as db_mod
 
-    if hasattr(db_mod._local, "conn"):
-        db_mod._local.conn.close()
-        del db_mod._local.conn
+    db_mod._disconnect_cached()
 
     set_database_path(db_file)
     initialize_database(db_file)
@@ -37,9 +35,7 @@ def isolated_database(tmp_path: Path, monkeypatch):
     yield db_file
 
     # Clean up thread-local connection after test
-    if hasattr(db_mod._local, "conn"):
-        db_mod._local.conn.close()
-        del db_mod._local.conn
+    db_mod._disconnect_cached()
 
 
 @pytest.fixture

@@ -204,6 +204,8 @@ class MainWindow(QMainWindow):
         tools_menu = QMenu(tools_btn)
         fetch_missing = tools_menu.addAction("Fetch Missing Data")
         refresh_all = tools_menu.addAction("Refresh Anime Data")
+        tools_menu.addSeparator()
+        cloud_sync = tools_menu.addAction("Cloud Sync…")
         tools_btn.setMenu(tools_menu)
         row.addWidget(tools_btn)
 
@@ -270,6 +272,7 @@ class MainWindow(QMainWindow):
         quit_action.triggered.connect(self._quit)
         fetch_missing.triggered.connect(lambda: self._on_bulk_enrich(False))
         refresh_all.triggered.connect(lambda: self._on_bulk_enrich(True))
+        cloud_sync.triggered.connect(self._on_cloud_sync)
         about.triggered.connect(self._show_about)
 
         return toolbar
@@ -662,6 +665,12 @@ class MainWindow(QMainWindow):
         from animevault.ui.import_dialogs import run_sql_import_flow
 
         run_sql_import_flow(self, path, on_done=self.library_changed.emit)
+
+    def _on_cloud_sync(self) -> None:
+        """Open the optional Google account / cloud sync dialog."""
+        from animevault.ui.account_dialog import AccountDialog
+
+        AccountDialog(self).exec()
 
     def _on_backup(self) -> None:
         from animevault.migration import backup_database

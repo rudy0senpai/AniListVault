@@ -17,9 +17,16 @@ _DB_PATH = _APP_DIR / "animevault.db"
 
 
 def set_database_path(path: Path) -> None:
-    """Override the database path. Intended for tests."""
+    """Override the database path.
+
+    Any connection already cached for this thread is closed first —
+    otherwise a path change would silently keep using the previous file,
+    which shows up as confusing "no such column" errors when the two
+    databases have different schemas.
+    """
     global _DB_PATH
-    _DB_PATH = path
+    _DB_PATH = Path(path)
+    _disconnect_cached()
 
 
 def database_path() -> Path:
@@ -94,20 +101,37 @@ CREATE TABLE IF NOT EXISTS meta (
 _local = threading.local()
 
 
+def _disconnect_cached() -> None:
+    """Close and forget this thread's cached connection, if any."""
+    conn = getattr(_local, "conn", None)
+    if conn is not None:
+        try:
+            conn.close()
+        except sqlite3.Error:
+            pass
+        _local.conn = None
+
+
 @contextmanager
 def get_connection() -> Iterator[sqlite3.Connection]:
     """Yield a SQLite connection for the current thread.
 
     The connection is created on first use per thread and reused for the
-    lifetime of that thread.
+    lifetime of that thread, unless the database path changes.
     """
     conn = getattr(_local, "conn", None)
+    # Reconnect when the path no longer matches, so a database switch is
+    # never masked by a stale handle.
+    if conn is not None and getattr(_local, "path", None) != str(_DB_PATH):
+        _disconnect_cached()
+        conn = None
     if conn is None:
         conn = sqlite3.connect(str(_DB_PATH), detect_types=sqlite3.PARSE_DECLTYPES)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL;")
         conn.execute("PRAGMA foreign_keys=ON;")
         _local.conn = conn
+        _local.path = str(_DB_PATH)
     yield conn
 
 
