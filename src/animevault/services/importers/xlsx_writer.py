@@ -76,15 +76,19 @@ def write_sheet(
                 seen.append(_clean(v))
     shared = {s: i for i, s in enumerate(seen)}
 
-    def build_row(values: Sequence[Any], row_num: int) -> str:
+    def build_row(values: Sequence[Any], row_num: int, style: str = "") -> str:
         cells = []
         for col, value in enumerate(values):
             xml = _cell_xml(f"{col_letter(col)}{row_num}", value, shared)
             if xml:
+                if style:
+                    # Insert the style attribute into the <c> element.
+                    xml = xml.replace("<c ", f'<c {style} ', 1)
                 cells.append(xml)
         return f'<row r="{row_num}">{"".join(cells)}</row>'
 
-    sheet_rows = [build_row(headers, 1)]
+    # Style 1 is the bold header defined in styles_xml.
+    sheet_rows = [build_row(headers, 1, style='s="1"')]
     for i, row in enumerate(rows, start=2):
         sheet_rows.append(build_row(row, i))
 
@@ -114,11 +118,36 @@ def write_sheet(
         "</Relationships>"
     )
 
+    # Excel treats styles.xml as invalid without the fonts/fills/borders
+    # sections and offers to "repair" the workbook, discarding cell text.
+    # Index 0 is the default style; index 1 is a bold header.
     styles_xml = (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         f'<styleSheet xmlns="{NS_MAIN}">'
         '<numFmts count="0"/>'
-        '<cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellXfs>'
+        '<fonts count="2">'
+        '<font><sz val="11"/><color theme="1"/><name val="Calibri"/>'
+        '<family val="2"/></font>'
+        '<font><b/><sz val="11"/><color theme="1"/><name val="Calibri"/>'
+        '<family val="2"/></font>'
+        "</fonts>"
+        '<fills count="2">'
+        '<fill><patternFill patternType="none"/></fill>'
+        '<fill><patternFill patternType="gray125"/></fill>'
+        "</fills>"
+        '<borders count="1">'
+        "<border><left/><right/><top/><bottom/><diagonal/></border>"
+        "</borders>"
+        '<cellStyleXfs count="1">'
+        '<xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>'
+        "</cellStyleXfs>"
+        '<cellXfs count="2">'
+        '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'
+        '<xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/>'
+        "</cellXfs>"
+        '<cellStyles count="1">'
+        '<cellStyle name="Normal" xfId="0" builtinId="0"/>'
+        "</cellStyles>"
         "</styleSheet>"
     )
 

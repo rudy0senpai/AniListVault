@@ -310,3 +310,88 @@ class TestEnglishTitlePreference:
             }
         )
         assert meta.category == MEDIA_MANHWA
+
+class TestXlsxIsValidForExcel:
+    """Excel silently "repairs" a workbook whose styles.xml is incomplete.
+
+    The required fonts/fills/borders sections must be present, otherwise
+    Excel discards cell text and shows a repair banner.
+    """
+
+    def _export(self, tmp_path):
+        from animevault.services.importers.exporter import export_library
+
+        from animevault.models.anime import Anime
+
+        Anime.create(
+            title="Naruto", title_en="Naruto", episodes=220,
+            episodes_watched=220, tier="SS", status="completed",
+            media_type="TV", genres=["Action", "Adventure"],
+            studios=["Studio Pierrot"], season="FALL", season_year=2002,
+        )
+        return export_library(tmp_path / "out.xlsx", fmt="xlsx").path
+
+    def test_styles_declares_required_sections(self, migrated_database, tmp_path):
+        import zipfile
+
+        path = self._export(tmp_path)
+        with zipfile.ZipFile(path) as z:
+            styles = z.read("xl/styles.xml").decode("utf-8")
+        for tag in ("fonts", "fills", "borders", "cellXfs",
+                    "cellStyleXfs", "cellStyles"):
+            assert f"<{tag}" in styles, f"styles.xml is missing <{tag}>"
+
+    def test_every_part_is_valid_xml(self, migrated_database, tmp_path):
+        import zipfile
+        from xml.etree import ElementTree as ET
+
+        path = self._export(tmp_path)
+        with zipfile.ZipFile(path) as z:
+            for name in z.namelist():
+                if name.endswith((".xml", ".rels")):
+                    ET.fromstring(z.read(name))  # raises on malformed XML
+
+    def test_text_and_metadata_survive_a_round_trip(self, migrated_database, tmp_path):
+        from animevault.services.importers.xlsx_preview import preview_xlsx
+
+        path = self._export(tmp_path)
+        preview = preview_xlsx(path)
+        assert preview.valid_rows >= 1
+        draft = preview.parsed.drafts[0]
+        assert draft.title == "Naruto"
+        assert draft.tier == "SS"
+        assert draft.episodes == 220
+        assert "Action" in draft.genres
+
+    def test_csv_carries_the_same_fields(self, migrated_database, tmp_path):
+        import csv
+
+        from animevault.services.importers.exporter import export_library
+
+        from animevault.models.anime import Anime
+
+        Anime.create(title="Bleach", episodes=366, tier="A",
+                     genres=["Action"], studios=["Studio Pierrot"])
+        path = export_library(tmp_path / "out.csv", fmt="csv").path
+        with path.open(encoding="utf-8-sig") as handle:
+            rows = list(csv.DictReader(handle))
+        row = next(r for r in rows if r["Title"] == "Bleach")
+        assert row["Episodes"] == "366"
+        assert row["Tier"] == "A"
+        assert row["Genres"] == "Action"
+        assert row["Studios"] == "Studio Pierrot"
+        assert row["Media Type"] == "anime"
+
+    def test_sql_export_contains_metadata_table(self, migrated_database, tmp_path):
+        from animevault.services.importers.exporter import export_library
+        from animevault.services.importers.sql_importer import preview_sql
+
+        from animevault.models.literature import Literature
+
+        Literature.create(title="Solo Leveling", category="manhwa",
+                          chapters=201, tier="SSS", authors=["Chugong"])
+        path = export_library(tmp_path / "out.sql", fmt="sql").path
+        preview = preview_sql(path)
+        assert preview.ok
+        assert "literature" in preview.tables
+        assert "INSERT INTO literature_metadata" in path.read_text(encoding="utf-8")
