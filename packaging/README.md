@@ -1,25 +1,13 @@
 # Packaging for Windows
 
-Builds a standalone `AnimeVault.exe` and an `AnimeVault-Setup.exe`
-installer that registers a proper Windows uninstaller.
-
-## Prerequisites
-
-Two tools, neither of which is bundled with Python:
-
-```powershell
-pip install pyinstaller
-winget install JRSoftware.InnoSetup
-```
-
-- **PyInstaller** freezes the app and everything it imports (PySide6,
-  QtMultimedia and the background video) into one folder.
-- **Inno Setup** turns that folder into `AnimeVault-Setup.exe` and writes
-  the uninstaller Windows records under *Apps & features*.
+Builds a single `AnimeVault-Setup.exe` that a non-technical user can
+double-click. No installer toolchain is required — the setup program is
+itself a small self-extracting PyInstaller build.
 
 ## Build
 
 ```powershell
+pip install pyinstaller
 .\packaging\build_windows.ps1
 ```
 
@@ -27,44 +15,44 @@ Output lands in `dist/`:
 
 | File | What it is |
 |---|---|
-| `AnimeVault-Setup.exe` | Installer — run this to install |
+| `AnimeVault-Setup.exe` | **The installer.** ~75 MB, one file. |
 | `AnimeVault\AnimeVault.exe` | The frozen app, runnable without installing |
 
-To build only the portable copy and skip the installer:
+To rebuild only the installer from an existing `dist/AnimeVault/`:
 
 ```powershell
-.\packaging\build_windows.ps1 -SkipInstaller
+.\packaging\build_installer.py
 ```
 
 ## What the installer does
 
-- Installs to `%LOCALAPPDATA%\Programs\AnimeVault` for the current user
-  (no administrator rights needed; you can opt into all-users)
-- Adds Start-menu and optional Desktop shortcuts
-- Registers **AnimeVault Uninstall** in Windows *Apps & features*
-- Deletes the cached poster and cache folders on uninstall
+When a user double-clicks `AnimeVault-Setup.exe`:
+
+1. Asks for confirmation (or offers repair if already installed).
+2. Extracts to `%LOCALAPPDATA%\Programs\AnimeVault` — **no admin rights needed**.
+3. Creates Start-menu and Desktop shortcuts.
+4. Registers **AnimeVault** in Windows *Apps & features*, with an
+   uninstaller.
+5. Launches the app.
 
 ## Uninstalling
 
-**Normal way:** Windows → *Apps & features* → **AnimeVault Uninstall**.
+**Normal way:** Windows → *Apps & features* → **AnimeVault** → Uninstall.
 
 **From this repo:**
 
 ```powershell
-# Remove the app, keep your library
+# Remove the app, keep the library
 .\packaging\uninstall.ps1
 
 # Remove the app and delete the library database, posters and settings
 .\packaging\uninstall.ps1 -PurgeData
 ```
 
-The script prefers the registered uninstaller when it finds one and
-falls back to deleting the install folder directly.
+## Where user data lives
 
-## Where your data lives
-
-The library is **not** inside the install folder, so uninstalling does not
-silently destroy it:
+The library sits **outside** the install folder, so uninstalling never
+destroys it:
 
 ```
 %APPDATA%\AnimeVault\animevault.db   library
@@ -72,12 +60,12 @@ silently destroy it:
 %APPDATA%\AnimeVault\cache\         provider cache
 ```
 
-Deleting that folder resets the application completely.
-
 ## Notes
 
-- The first build takes a few minutes — `--collect-all PySide6` is large.
-- `QtMultimedia` and the background video are explicitly listed as
-  hidden imports and added data, because neither is detected
-  automatically.
-- Build on Windows; PyInstaller does not cross-compile.
+- The app is large (~150 MB unpacked) because PySide6 and QtMultimedia
+  are bundled, and the background video alone is 8.4 MB. The installer
+  compresses that to ~75 MB.
+- The first build takes several minutes; later rebuilds are quicker.
+- Build on Windows — PyInstaller does not cross-compile.
+- `packaging/AnimeVault.iss` is kept for anyone who prefers Inno Setup;
+  it is not required.

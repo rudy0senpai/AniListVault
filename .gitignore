@@ -16,3 +16,7 @@ build/
 
 # Local scratch + launcher, not part of the application.
 /scratch/
+
+# Build output (large binaries)
+/dist/
+/build/
