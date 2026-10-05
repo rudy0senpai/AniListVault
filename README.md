@@ -19,8 +19,8 @@ Poster-first cards with progress, status and tier badges, plus a live analytics 
 The same card system for literature — type is derived from provider data
 (country of origin), not guessed from the title.
 
-| Manga | Manhwa |
-|---|---|
+| Manga                           | Manhwa                            |
+| ------------------------------- | --------------------------------- |
 | ![Manga](preview/manga-tab.png) | ![Manhwa](preview/manhwa-tab.png) |
 
 ### Manhua
@@ -30,8 +30,9 @@ The same card system for literature — type is derived from provider data
 ### Add by name only
 
 The primary workflow needs just a title; metadata is fetched and merged automatically.
-
-![Add dialog](preview/anime-tab-add-dialog.png)
+| AUTO ADD                                             | MANUAL ADD                                             |
+| ---------------------------------------------------- | ------------------------------------------------------ |
+| ![Add dialog](preview/anime-tab-add-dialog-auto.png) | ![Add dialog](preview/anime-tab-add-dialog-manual.png) |
 
 ## Features
 
