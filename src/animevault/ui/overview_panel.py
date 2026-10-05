@@ -98,6 +98,7 @@ class _StatRow(QWidget):
 
     def __init__(self, label: str, dot: Optional[str] = None) -> None:
         super().__init__()
+        self.setToolTip(label)
         row = QHBoxLayout(self)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(8)
