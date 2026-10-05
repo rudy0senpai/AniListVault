@@ -163,10 +163,13 @@ def main():
 
     shutil.rmtree(tmp, ignore_errors=True)
 
-    # The uninstaller is a genuinely separate executable built from
-    # packaging/uninstaller.py.  Copying the installer here would only
-    # re-install the app when the user asked to remove it.
-    _install_uninstaller(install_dir)
+    # The pre-built uninstall.exe is already inside the payload zip
+    # (it lives alongside AnimeVault.exe in dist/AnimeVault).
+    # Nothing extra to copy — it was extracted with everything else.
+    uninstaller = os.path.join(install_dir, "uninstall.exe")
+    if not os.path.isfile(uninstaller):
+        msg("Note: uninstall.exe was not found in the payload.\n"
+            "You may need to reinstall to get a working uninstaller.")
 
     desktop = os.path.join(os.path.expanduser("~"), "Desktop")
     make_shortcuts(install_dir, os.path.isdir(desktop))
@@ -178,7 +181,10 @@ def main():
     except Exception as e:
         msg("Installed, but could not start automatically:\n%s" % e)
         msg("Run:\n%s" % exe)
-        '''
+
+if __name__ == "__main__":
+    main()
+'''
 
 
 
@@ -232,13 +238,21 @@ def build() -> int:
     if not shutil.which("powershell"):
         raise SystemExit("PowerShell is required to create shortcuts.")
 
-    # 1. Zip the frozen application.
+    # 0. Build the standalone uninstaller so it can be bundled.
+    uninstaller = build_uninstaller()
+    print(f"  uninstaller: {uninstaller} "
+          f"({uninstaller.stat().st_size / 1024:.0f} KB)")
+
+    # 1. Zip the frozen application + uninstaller.
     payload = ROOT / "dist" / "payload.zip"
     print("Zipping application files...")
     with zipfile.ZipFile(payload, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as z:
         for item in DIST.rglob("*"):
             if item.is_file():
                 z.write(item, Path("app") / item.relative_to(DIST))
+        # Include the uninstaller inside the payload so the launcher
+        # doesn't need to compile anything at install time.
+        z.write(uninstaller, Path("app") / "uninstall.exe")
     print(f"  payload: {payload.stat().st_size / 1024 / 1024:.1f} MB")
 
     # 2. Build the small self-extracting stub around it.
