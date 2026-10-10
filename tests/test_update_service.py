@@ -111,9 +111,69 @@ def test_unavailable_release_endpoint_is_not_reported_as_up_to_date(monkeypatch)
         )
 
 
-def test_release_source_must_be_configured_and_official():
-    with pytest.raises(UpdateError, match="Enter an official HTTPS"):
+def test_default_private_repo_check_uses_github_cli_auth(monkeypatch):
+    import json
+    import subprocess
+
+    from animevault.services.update import DEFAULT_RELEASE_API
+
+    monkeypatch.delenv("ANIMEVAULT_RELEASE_API", raising=False)
+    calls = []
+
+    def gh_auth(command, **kwargs):
+        calls.append((command, kwargs))
+        return subprocess.CompletedProcess(
+            command, 0, stdout="fake-token-for-test-only\n", stderr=""
+        )
+
+    payload = json.dumps(release_payload("v0.3.1")).encode("utf-8")
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _size=-1):
+            return payload
+
+    requests = []
+
+    def open_url(request, **_kwargs):
+        requests.append(request)
+        return Response()
+
+    monkeypatch.setattr("animevault.services.update.subprocess.run", gh_auth)
+    monkeypatch.setattr("animevault.services.update.urlopen", open_url)
+
+    assert check_for_updates("0.3.1") is None
+    assert requests[0].full_url == DEFAULT_RELEASE_API
+    assert requests[0].get_header("Authorization") == "Bearer fake-token-for-test-only"
+    assert calls[0][0][:3] == ["gh", "auth", "token"]
+    assert calls[0][1]["capture_output"] is True
+    assert calls[0][1]["timeout"] <= 5
+
+
+def test_private_repo_404_recommends_signing_in_with_github_cli(monkeypatch):
+    from urllib.error import HTTPError
+
+    monkeypatch.delenv("ANIMEVAULT_RELEASE_API", raising=False)
+    monkeypatch.setattr(
+        "animevault.services.update.subprocess.run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(FileNotFoundError()),
+    )
+    monkeypatch.setattr(
+        "animevault.services.update.urlopen",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            HTTPError("url", 404, "Not Found", {}, None)
+        ),
+    )
+    with pytest.raises(UpdateError, match="gh auth login"):
         check_for_updates("0.3.1")
+
+
+def test_release_source_must_be_configured_and_official():
     with pytest.raises(UpdateError, match="Enter an official HTTPS"):
         check_for_updates("0.3.1", release_api="https://example.com/latest")
 

@@ -96,6 +96,88 @@ def test_theme_picker_applies_and_persists_selection(manager):
     dialog.close()
 
 
+def test_appearance_dialog_uses_scrollable_responsive_layout(manager):
+    from PySide6.QtWidgets import QBoxLayout
+    from animevault.ui.theme_dialog import ThemeSettingsDialog
+
+    dialog = ThemeSettingsDialog(manager=manager)
+    assert dialog.windowTitle() == "Appearance & Theme"
+    assert dialog.content_scroll.widgetResizable()
+
+    dialog.show()
+    QApplication.instance().processEvents()
+    dialog.resize(700, 600)
+    QApplication.instance().processEvents()
+    assert dialog._picker_layout.direction() == QBoxLayout.Direction.TopToBottom
+    dialog.resize(900, 700)
+    QApplication.instance().processEvents()
+    assert dialog._picker_layout.direction() == QBoxLayout.Direction.LeftToRight
+    dialog.close()
+
+
+def test_selected_theme_is_visible_after_dialog_opens(manager):
+    from animevault.ui.theme_dialog import ThemeSettingsDialog
+
+    manager.apply_theme("japanese-sunset", persist=False)
+    dialog = ThemeSettingsDialog(manager=manager)
+    dialog.show()
+    QApplication.instance().processEvents()
+    selected = dialog._items["japanese-sunset"]
+    assert dialog.list.visualItemRect(selected).intersects(dialog.list.viewport().rect())
+    dialog.close()
+
+
+def test_dialog_reopening_scrolls_to_current_theme(manager):
+    from animevault.ui.theme_dialog import ThemeSettingsDialog
+
+    manager.apply_theme("japanese-sunset", persist=False)
+    dialog = ThemeSettingsDialog(manager=manager)
+    dialog.show()
+    QApplication.instance().processEvents()
+    dialog.list.scrollToBottom()
+    dialog.hide()
+    QApplication.instance().processEvents()
+    dialog.show()
+    QApplication.instance().processEvents()
+    selected = dialog._items["japanese-sunset"]
+    assert dialog.list.visualItemRect(selected).intersects(dialog.list.viewport().rect())
+    dialog.close()
+
+
+def test_narrow_resize_keeps_settings_content_at_top(manager):
+    from animevault.ui.theme_dialog import ThemeSettingsDialog
+
+    manager.apply_theme("japanese-sunset", persist=False)
+    dialog = ThemeSettingsDialog(manager=manager)
+    dialog.show()
+    QApplication.instance().processEvents()
+    dialog.resize(900, 800)
+    QApplication.instance().processEvents()
+    dialog.content_scroll.verticalScrollBar().setValue(0)
+    manager.apply_theme("light", persist=False)
+    dialog.resize(700, 600)
+    QApplication.instance().processEvents()
+    assert dialog.content_scroll.verticalScrollBar().value() == 0
+    dialog.close()
+
+
+def test_theme_search_and_reset_preserve_effect_preference(manager):
+    from animevault.ui.theme_dialog import ThemeSettingsDialog
+
+    dialog = ThemeSettingsDialog(manager=manager)
+    dialog.search.setText("Japanese Sunset")
+    assert not dialog._items["japanese-sunset"].isHidden()
+    assert dialog._items["midnight-blue"].isHidden()
+    dialog.list.setCurrentItem(dialog._items["japanese-sunset"])
+    assert dialog.description.text() == THEMES["japanese-sunset"].description
+
+    dialog.reduce_effects.setChecked(True)
+    dialog.reset_theme_button.click()
+    assert manager.theme_id == DEFAULT_THEME_ID
+    assert manager.reduce_effects is True
+    dialog.close()
+
+
 def test_invalid_theme_definition_falls_back_and_is_hidden_from_picker(manager):
     from dataclasses import replace
     from animevault.ui.theme_dialog import ThemeSettingsDialog
@@ -123,6 +205,56 @@ def test_update_source_is_validated_and_persisted(manager):
     )
     assert dialog._save_release_source() is True
     assert dialog._settings.value("updates/release_api") == dialog.release_api_input.text()
+    dialog.close()
+
+
+def test_update_source_defaults_to_repository_and_empty_input_saves(manager):
+    from animevault.services.update import DEFAULT_RELEASE_API
+    from animevault.ui.theme_dialog import ThemeSettingsDialog
+
+    manager.settings.remove("updates/release_api")
+    manager.settings.sync()
+    dialog = ThemeSettingsDialog(manager=manager)
+    assert dialog.release_api_input.text() == DEFAULT_RELEASE_API
+    dialog.release_api_input.clear()
+    assert dialog._save_release_source() is True
+    assert dialog.release_api_input.text() == DEFAULT_RELEASE_API
+    assert dialog._settings.value("updates/release_api") == DEFAULT_RELEASE_API
+    dialog.close()
+
+
+def test_check_updates_button_uses_builtin_source_without_user_entry(manager, monkeypatch):
+    from animevault.services.update import DEFAULT_RELEASE_API
+    from animevault.ui.theme_dialog import ThemeSettingsDialog
+
+    manager.settings.remove("updates/release_api")
+    manager.settings.sync()
+    dialog = ThemeSettingsDialog(manager=manager)
+    dialog.release_api_input.clear()
+    started = []
+    monkeypatch.setattr(
+        dialog,
+        "_start_update_worker",
+        lambda mode, info=None: started.append((mode, info)),
+    )
+    dialog._check_for_updates()
+    assert started == [("check", None)]
+    assert dialog._settings.value("updates/release_api") == DEFAULT_RELEASE_API
+    assert dialog.release_api_input.text() == DEFAULT_RELEASE_API
+    dialog.close()
+
+
+def test_legacy_owner_repo_template_migrates_to_builtin_release_source(manager):
+    from animevault.services.update import DEFAULT_RELEASE_API
+    from animevault.ui.theme_dialog import ThemeSettingsDialog
+
+    manager.settings.setValue(
+        "updates/release_api",
+        "https://api.github.com/repos/OWNER/REPO/releases/latest",
+    )
+    manager.settings.sync()
+    dialog = ThemeSettingsDialog(manager=manager)
+    assert dialog.release_api_input.text() == DEFAULT_RELEASE_API
     dialog.close()
 
 

@@ -15,6 +15,8 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 RELEASE_API_ENV = "ANIMEVAULT_RELEASE_API"
+DEFAULT_RELEASE_API = "https://api.github.com/repos/rudy0senpai/AniListVault/releases/latest"
+LEGACY_RELEASE_API_TEMPLATE = "https://api.github.com/repos/OWNER/REPO/releases/latest"
 _INSTALLER_NAME = "AnimeVault-Setup.exe"
 _MAX_INSTALLER_BYTES = 512 * 1024 * 1024
 _VERSION_RE = re.compile(r"^v?(\d+(?:\.\d+){1,3})$", re.IGNORECASE)
@@ -104,8 +106,10 @@ def _is_github_https(url: object) -> bool:
 
 
 def validate_release_api_url(value: str) -> str:
-    """Accept only an official public GitHub latest-release API endpoint."""
+    """Accept an official GitHub latest-release endpoint; migrate the old template."""
     candidate = (value or "").strip()
+    if candidate.rstrip("/").casefold() == LEGACY_RELEASE_API_TEMPLATE.casefold():
+        return DEFAULT_RELEASE_API
     parsed = urlparse(candidate)
     if (
         parsed.scheme != "https"
@@ -123,28 +127,57 @@ def validate_release_api_url(value: str) -> str:
     return candidate.rstrip("/")
 
 
+def _github_cli_token() -> str | None:
+    """Read a GitHub token from gh's existing auth store, without persisting it."""
+    try:
+        result = subprocess.run(
+            ["gh", "auth", "token", "--hostname", "github.com"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    token = result.stdout.strip()
+    if not token or any(character.isspace() for character in token):
+        return None
+    return token
+
+
 def check_for_updates(
     current_version: str,
     *,
     timeout: float = 12.0,
     release_api: str | None = None,
 ) -> UpdateInfo | None:
-    """Query a configured official GitHub release endpoint."""
-    endpoint = validate_release_api_url(release_api or os.environ.get(RELEASE_API_ENV, ""))
-    request = Request(
-        endpoint,
-        headers={
-            "Accept": "application/vnd.github+json",
-            "User-Agent": "AnimeVault-Update-Checker",
-            "X-GitHub-Api-Version": "2022-11-28",
-        },
+    """Query the configured release endpoint, defaulting to AniListVault."""
+    endpoint = validate_release_api_url(
+        release_api or os.environ.get(RELEASE_API_ENV) or DEFAULT_RELEASE_API
     )
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "AnimeVault-Update-Checker",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    token = _github_cli_token()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    request = Request(endpoint, headers=headers)
     try:
         with urlopen(request, timeout=timeout) as response:
             payload = json.loads(response.read(2 * 1024 * 1024).decode("utf-8"))
     except HTTPError as exc:
         if exc.code == 404:
-            raise UpdateError("The configured release endpoint returned 404; verify its public repository and release path.") from exc
+            raise UpdateError(
+                "GitHub returned 404. The release endpoint may be private without "
+                "credentials or may not have a published release. For private access, "
+                "install GitHub CLI and run `gh auth login` with an account that can "
+                "read AniListVault."
+            ) from exc
         raise UpdateError(f"GitHub update check failed (HTTP {exc.code}).") from exc
     except (URLError, TimeoutError, OSError, ValueError) as exc:
         raise UpdateError(f"Could not check for updates: {exc}") from exc

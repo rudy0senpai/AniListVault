@@ -253,6 +253,123 @@ QWidget {{
 
 QMainWindow, QDialog {{ background-color: {BG_DEEP}; }}
 
+/* ── Appearance settings dialog ───────────────────────────── */
+QDialog#appearanceSettingsDialog {{ background: {BG_DEEP}; }}
+QLabel#settingsTitle {{
+    background: transparent;
+    color: {TEXT_PRIMARY};
+    font-size: 18pt;
+    font-weight: 700;
+}}
+QLabel#settingsSubtitle {{
+    background: transparent;
+    color: {TEXT_SECONDARY};
+    font-size: 11pt;
+}}
+QLabel#settingsSectionTitle {{
+    background: transparent;
+    color: {TEXT_PRIMARY};
+    font-size: 14pt;
+    font-weight: 700;
+}}
+QFrame#themePreview {{
+    background: {BG_PANEL};
+    border: 1px solid {BORDER};
+    border-radius: 12px;
+}}
+QLabel#themeName {{
+    background: transparent;
+    color: {TEXT_PRIMARY};
+    font-size: 14pt;
+    font-weight: 700;
+}}
+QLabel#themeDescription, QLabel#updatesStatus {{
+    background: transparent;
+    color: {TEXT_SECONDARY};
+    font-size: 10.5pt;
+}}
+QLabel#settingsFieldLabel {{
+    background: transparent;
+    color: {TEXT_SECONDARY};
+    font-size: 10.5pt;
+    font-weight: 600;
+}}
+QLabel#installedVersion {{
+    background: transparent;
+    color: {TEXT_PRIMARY};
+    font-size: 11pt;
+    font-weight: 600;
+}}
+QLabel#appliedThemeBadge {{
+    color: {TEXT_ON_ACCENT};
+    background: {ACCENT_DIM};
+    border-radius: 8px;
+    padding: 4px 10px;
+    font-size: 9.5pt;
+    font-weight: 600;
+}}
+QLabel#themeSwatch {{ border-radius: 5px; }}
+QLabel#themeSampleTitle {{ background: transparent; font-weight: 600; }}
+QGroupBox#updateGroup {{
+    background: {BG_PANEL};
+    border: 1px solid {BORDER};
+    border-radius: 12px;
+    margin-top: 12px;
+    padding-top: 8px;
+}}
+QGroupBox#updateGroup::title {{
+    subcontrol-origin: margin;
+    left: 16px;
+    padding: 0 8px;
+    color: {ACCENT};
+    font-size: 13pt;
+    font-weight: 700;
+}}
+QListWidget#themeList {{
+    background: {BG_PANEL};
+    border: 1px solid {BORDER};
+    border-radius: 12px;
+    padding: 6px;
+    outline: none;
+}}
+QListWidget#themeList::item {{
+    color: {TEXT_SECONDARY};
+    font-size: 11.5pt;
+    padding: 6px 10px;
+    border-radius: 7px;
+    margin: 1px 0;
+}}
+QListWidget#themeList::item:selected {{
+    background: {BG_PANEL_HI};
+    color: {TEXT_PRIMARY};
+    border-left: 3px solid {ACCENT};
+}}
+QListWidget#themeList::item:focus {{ outline: none; }}
+QPushButton#settingsPrimary {{
+    background: {ACCENT};
+    color: {TEXT_ON_ACCENT};
+    border: 1px solid {ACCENT};
+    border-radius: 8px;
+    padding: 8px 16px;
+    font-size: 10.5pt;
+    font-weight: 700;
+}}
+QPushButton#settingsPrimary:hover {{ background: {ACCENT_DIM}; border-color: {ACCENT_DIM}; }}
+QPushButton#settingsSecondary {{
+    background: {BG_PANEL_HI};
+    color: {TEXT_PRIMARY};
+    border: 1px solid {BORDER_HI};
+    border-radius: 8px;
+    padding: 8px 16px;
+    font-size: 10.5pt;
+    font-weight: 600;
+}}
+QPushButton#settingsSecondary:hover {{
+    background: {BG_PANEL};
+    border-color: {ACCENT};
+}}
+QCheckBox#effectsCheckbox {{ color: {TEXT_SECONDARY}; spacing: 10px; }}
+
 /* ── Header ─────────────────────────────────────────────── */
 #headerBar {{
     background-color: {BG_PANEL};
