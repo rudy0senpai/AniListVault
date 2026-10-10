@@ -48,13 +48,17 @@ The screenshots below show the Appearance & Theme dialog and additional library 
 
 ## Installation
 
-### Windows releases
+### Windows installer (recommended)
 
-Open the [GitHub Releases page](https://github.com/rudy0senpai/AniListVault/releases) and use an installer or other asset only if one is listed for the release. The repository contains a Windows packaging specification, but this README does not assume a particular release asset or installer filename.
+1. Open the official [AniListVault GitHub Releases page](https://github.com/rudy0senpai/AniListVault/releases).
+2. From the release's **Assets** section, download **`AnimeVault-Setup.exe`**.
+3. Run the downloaded installer and follow its prompts.
 
-### Run from source
+If no release currently lists that asset, the installer has not been published yet. The source-code ZIP on GitHub is not the installer; it contains the project files and is intended for development.
 
-Requires Python 3.10 or newer and PySide6 (installed from the project dependencies). From the repository root:
+### Development / Run from Source
+
+For contributors or users who prefer to run the project from source, use Python 3.10 or newer. From the repository root:
 
 **Windows PowerShell**
 
