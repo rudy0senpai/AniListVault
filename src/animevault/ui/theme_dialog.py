@@ -2,20 +2,58 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+import tempfile
+from pathlib import Path
+
+from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QColor, QPixmap, QIcon
 from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QMessageBox,
+    QPushButton,
     QVBoxLayout,
 )
 
+from animevault import __version__
+from animevault.services.update import (
+    UpdateInfo,
+    check_for_updates,
+    download_installer,
+    launch_installer,
+)
 from animevault.ui.theme import THEMES, ThemeManager
+
+
+class _UpdateWorker(QThread):
+    """Keep network checks and installer downloads off the GUI thread."""
+
+    result = Signal(object, object)
+
+    def __init__(self, mode: str, info: UpdateInfo | None = None, parent=None):
+        super().__init__(parent)
+        self.mode = mode
+        self.info = info
+
+    def run(self) -> None:
+        try:
+            if self.mode == "check":
+                output = check_for_updates(__version__)
+            else:
+                if self.info is None:
+                    raise RuntimeError("No release is selected for download.")
+                output = download_installer(
+                    self.info, Path(tempfile.gettempdir()) / "AnimeVaultUpdate"
+                )
+            self.result.emit(output, None)
+        except Exception as exc:
+            self.result.emit(None, str(exc))
 
 
 class ThemeSettingsDialog(QDialog):
@@ -60,6 +98,18 @@ class ThemeSettingsDialog(QDialog):
         self.reduce_effects.setChecked(self.manager.reduce_effects)
         layout.addWidget(self.reduce_effects)
 
+        update_group = QGroupBox("Software Updates")
+        update_layout = QHBoxLayout(update_group)
+        self.update_status = QLabel(f"Installed version: {__version__}")
+        self.update_status.setWordWrap(True)
+        update_layout.addWidget(self.update_status, 1)
+        self.check_updates_button = QPushButton("Check for updates")
+        self.check_updates_button.clicked.connect(self._check_for_updates)
+        update_layout.addWidget(self.check_updates_button)
+        layout.addWidget(update_group)
+
+        self._update_worker: _UpdateWorker | None = None
+        self._pending_update: UpdateInfo | None = None
         self.list.currentItemChanged.connect(self._selection_changed)
         self.search.textChanged.connect(self._filter)
         self.reduce_effects.toggled.connect(self.manager.set_reduce_effects)
@@ -91,3 +141,78 @@ class ThemeSettingsDialog(QDialog):
             item.setHidden(query not in theme.name.casefold() and query not in theme.description.casefold())
         for category, group in self._groups.items():
             group.setHidden(not any(not self._items[k].isHidden() for k in THEMES if THEMES[k].category == category))
+
+    def _check_for_updates(self) -> None:
+        if self._update_worker is not None and self._update_worker.isRunning():
+            return
+        self.check_updates_button.setEnabled(False)
+        self.update_status.setText("Checking GitHub Releases…")
+        self._start_update_worker("check")
+
+    def _start_update_worker(self, mode: str, info: UpdateInfo | None = None) -> None:
+        worker = _UpdateWorker(mode, info, self)
+        self._update_worker = worker
+        worker.result.connect(self._update_finished)
+        worker.start()
+
+    def _update_finished(self, result, error) -> None:
+        worker = self._update_worker
+        mode = worker.mode if worker is not None else "check"
+        self.check_updates_button.setEnabled(True)
+        if error:
+            self.update_status.setText(f"Update failed: {error}")
+            self._pending_update = None
+            return
+
+        if mode == "check":
+            if result is None:
+                self.update_status.setText("No newer stable release found.")
+                return
+            info: UpdateInfo = result
+            self._pending_update = info
+            if not info.installer_url or not info.sha256:
+                self.update_status.setText(
+                    f'Version {info.version} is available, but has no digest-verified installer. '
+                    f'<a href="{info.page_url}">View release</a>.'
+                )
+                self.update_status.setTextFormat(Qt.TextFormat.RichText)
+                self.update_status.setOpenExternalLinks(True)
+                return
+            notes = info.notes.strip()[:1600] or "Release notes were not provided."
+            choice = QMessageBox.question(
+                self,
+                "AnimeVault update available",
+                f"Install AnimeVault {info.version}?\n\n{notes}\n\n"
+                "The setup file will be downloaded over HTTPS and checked against its SHA-256 digest.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if choice == QMessageBox.StandardButton.Yes:
+                self.check_updates_button.setEnabled(False)
+                self.update_status.setText(f"Downloading and verifying version {info.version}…")
+                self._start_update_worker("download", info)
+            else:
+                self.update_status.setText(f"Update {info.version} is available.")
+            return
+
+        info = self._pending_update
+        if info is None or not info.sha256:
+            self.update_status.setText("Update metadata is no longer available; check again.")
+            return
+        try:
+            launch_installer(result, info.sha256)
+        except Exception as exc:
+            self.update_status.setText(f"Verified download could not be launched: {exc}")
+            return
+        self.update_status.setText(
+            f"Version {info.version} setup launched. Follow its prompts to finish the update."
+        )
+        self._pending_update = None
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        worker = self._update_worker
+        if worker is not None and worker.isRunning():
+            self.update_status.setText("Please wait for the update operation to finish.")
+            event.ignore()
+            return
+        super().closeEvent(event)

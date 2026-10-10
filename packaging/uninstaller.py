@@ -88,28 +88,64 @@ def _remove_registry() -> None:
         pass
 
 
-def _start_self_delete(install_dir: str) -> None:
-    """Delete *install_dir* from a helper process.
+def _app_is_running() -> bool:
+    """Check for a still-running AnimeVault after requesting a graceful close."""
+    try:
+        result = subprocess.run(
+            ["tasklist", "/FI", f"IMAGENAME eq {APP_NAME}.exe", "/NH", "/FO", "CSV"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        return f'"{APP_NAME}.exe"' in (result.stdout or "")
+    except (OSError, subprocess.SubprocessError):
+        return True
 
-    A running process holds its own directory open on Windows, so the
-    deletion has to happen after this script exits.
+
+def _request_app_close() -> bool:
+    """Ask Windows to close the app without force-killing unsaved work."""
+    try:
+        subprocess.run(
+            ["taskkill", "/IM", f"{APP_NAME}.exe"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return not _app_is_running()
+    time.sleep(1)
+    return not _app_is_running()
+
+
+def _start_self_delete(install_dir: str) -> None:
+    """Remove the install directory after this frozen executable exits.
+
+    A PyInstaller executable is not a Python interpreter. Use a temporary
+    command script instead of trying to execute a Python helper with it.
     """
-    helper = os.path.join(tempfile.gettempdir(), "av_uninstall_cleanup.py")
-    with open(helper, "w", encoding="utf-8") as handle:
+    if not os.path.isdir(install_dir):
+        return
+    helper = os.path.join(tempfile.gettempdir(), f"av_uninstall_cleanup_{os.getpid()}.cmd")
+    target = os.path.normpath(install_dir).replace("%", "%%")
+    with open(helper, "w", encoding="utf-8", newline="\r\n") as handle:
         handle.write(
-            "import os, shutil, time\n"
-            f"target = {install_dir!r}\n"
-            "for _ in range(30):\n"
-            "    if not os.path.isdir(target):\n"
-            "        break\n"
-            "    shutil.rmtree(target, ignore_errors=True)\n"
-            "    time.sleep(0.5)\n"
+            "@echo off\r\n"
+            "timeout /t 2 /nobreak >nul\r\n"
+            f'rmdir /s /q "{target}"\r\n'
+            'del /f /q "%~f0" >nul 2>nul\r\n'
         )
     try:
-        subprocess.Popen([sys.executable, helper], close_fds=True)
+        subprocess.Popen(
+            [os.environ.get("COMSPEC", "cmd.exe"), "/c", "start", "", "/b", helper],
+            close_fds=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
     except Exception:
-        # Without the helper the user can simply delete the folder.
-        pass
+        try:
+            os.remove(helper)
+        except OSError:
+            pass
+        raise
 
 
 def main() -> int:
@@ -118,12 +154,6 @@ def main() -> int:
     install_dir = _install_dir()
     data = _data_dir()
 
-    # A running app would keep its files locked.
-    subprocess.run(
-        ["taskkill", "/F", "/IM", f"{APP_NAME}.exe"], capture_output=True
-    )
-    time.sleep(1)
-
     if not silent and not _confirm(
         f"Uninstall {APP_NAME}?\n\n"
         f"Application files will be removed from:\n{install_dir}\n\n"
@@ -131,9 +161,23 @@ def main() -> int:
     ):
         return 1
 
+    # Never force-kill the app; it could be writing the library database.
+    if not _request_app_close():
+        if not silent:
+            _msg(
+                f"{APP_NAME} is still running. Close it and run the uninstaller again.",
+                flags=0x10,
+            )
+        return 2
+
+    try:
+        _start_self_delete(install_dir)
+    except OSError as exc:
+        if not silent:
+            _msg(f"Could not schedule safe removal of the install folder:\n{exc}", flags=0x10)
+        return 3
     _remove_shortcuts()
     _remove_registry()
-    _start_self_delete(install_dir)
 
     if not silent:
         kept = (

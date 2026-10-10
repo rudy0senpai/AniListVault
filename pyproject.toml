@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "animevault"
-version = "0.0.1"
+version = "0.3.0"
 description = "A desktop anime library manager — v0.01 minimal manual-entry edition."
 readme = "README.md"
 requires-python = ">=3.10"

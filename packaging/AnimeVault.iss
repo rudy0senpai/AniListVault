@@ -10,7 +10,7 @@
 
 #define AppName "AnimeVault"
 #define AppVersion "0.3.0"
-#define AppPublisher "AnimeVault"
+#define AppPublisher "rudy0senpai"
 #define AppExeName "AnimeVault.exe"
 #define SourceDir "..\dist\AnimeVault"
 
