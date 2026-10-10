@@ -8,6 +8,7 @@ import os
 import urllib.error
 import urllib.request
 from pathlib import Path
+from threading import Lock
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -15,6 +16,9 @@ logger = logging.getLogger(__name__)
 _POSTERS_DIR: Path = (
     Path(os.environ.get("APPDATA", Path.home() / ".local")) / "AnimeVault" / "posters"
 )
+MAX_POSTER_BYTES = 15 * 1024 * 1024
+_poster_locks: dict[str, Lock] = {}
+_poster_locks_guard = Lock()
 
 
 def set_posters_dir(path: Path) -> None:
@@ -69,45 +73,62 @@ def download_poster(url: str, timeout: int = 15) -> Optional[str]:
 
     url = url.strip()
     target_path = get_poster_path_for_url(url)
+    with _poster_locks_guard:
+        lock = _poster_locks.setdefault(str(target_path), Lock())
 
-    # Return cached image if it already exists and is non-empty
-    if target_path.exists() and target_path.stat().st_size > 512:
-        return str(target_path)
+    with lock:
+        if target_path.exists() and 512 < target_path.stat().st_size <= MAX_POSTER_BYTES:
+            return str(target_path)
 
-    _POSTERS_DIR.mkdir(parents=True, exist_ok=True)
-    tmp_path = target_path.with_suffix(f".tmp_{os.getpid()}_{hashlib.md5(url.encode()).hexdigest()[:8]}")
+        _POSTERS_DIR.mkdir(parents=True, exist_ok=True)
+        tmp_path = target_path.with_name(f"{target_path.name}.tmp_{os.getpid()}_{os.urandom(4).hex()}")
 
-    req = urllib.request.Request(
-        url,
-        headers={
-            "User-Agent": "AnimeVault/0.2 (ImageDownloader)",
-            "Accept": "image/webp,image/png,image/jpeg,image/*;q=0.8",
-        },
-    )
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "AnimeVault/0.2 (ImageDownloader)",
+                "Accept": "image/webp,image/png,image/jpeg,image/*;q=0.8",
+            },
+        )
 
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            data = resp.read()
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                headers = getattr(resp, "headers", None)
+                content_type = headers.get("Content-Type", "") if headers else ""
+                if content_type and not content_type.lower().startswith("image/"):
+                    logger.warning("Poster response from %r has non-image content type %r", url, content_type)
+                    return None
+                content_length = headers.get("Content-Length") if headers else None
+                if content_length and int(content_length) > MAX_POSTER_BYTES:
+                    logger.warning("Poster response from %r exceeds the size limit", url)
+                    return None
+                try:
+                    data = resp.read(MAX_POSTER_BYTES + 1)
+                except TypeError:  # compatibility with simple file-like test doubles
+                    data = resp.read()
 
-        if not is_valid_image(data):
-            logger.warning("Poster at %r is not a valid image format", url)
+            if len(data) > MAX_POSTER_BYTES:
+                logger.warning("Poster response from %r exceeds the size limit", url)
+                return None
+            if not is_valid_image(data):
+                logger.warning("Poster at %r is not a valid image format", url)
+                return None
+
+            tmp_path.write_bytes(data)
+            os.replace(tmp_path, target_path)
+            return str(target_path)
+        except urllib.error.HTTPError as exc:
+            logger.warning("HTTP error %s downloading poster from %s", exc.code, url)
             return None
-
-        tmp_path.write_bytes(data)
-        os.replace(tmp_path, target_path)
-        return str(target_path)
-    except urllib.error.HTTPError as exc:
-        logger.warning("HTTP error %s downloading poster from %s", exc.code, url)
-        return None
-    except urllib.error.URLError as exc:
-        logger.warning("Network error downloading poster from %s: %s", url, exc)
-        return None
-    except Exception as exc:
-        logger.warning("Unexpected error downloading poster from %s: %s", url, exc)
-        return None
-    finally:
-        if tmp_path.exists():
-            try:
-                tmp_path.unlink()
-            except Exception:
-                pass
+        except urllib.error.URLError as exc:
+            logger.warning("Network error downloading poster from %s: %s", url, exc)
+            return None
+        except Exception as exc:
+            logger.warning("Unexpected error downloading poster from %s: %s", url, exc)
+            return None
+        finally:
+            if tmp_path.exists():
+                try:
+                    tmp_path.unlink()
+                except Exception:
+                    pass

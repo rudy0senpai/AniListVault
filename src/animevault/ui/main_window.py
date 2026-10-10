@@ -748,7 +748,16 @@ class MainWindow(QMainWindow):
         self._progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
         self._progress_dialog.setMinimumDuration(200)
 
-        self._bulk_worker = BulkEnrichmentWorker(items, refresh_all=refresh_all, parent=self)
+        from animevault.services.import_tree import ImportTree
+
+        checkpoint = ImportTree.JOBS_DIR / "latest.json"
+        self._bulk_worker = BulkEnrichmentWorker(
+            items,
+            refresh_all=refresh_all,
+            parent=self,
+            checkpoint_path=checkpoint,
+            resume_from=checkpoint if not refresh_all else None,
+        )
         self._progress_dialog.canceled.connect(self._bulk_worker.cancel)
         self._bulk_worker.progress.connect(self._on_bulk_progress)
         self._bulk_worker.enrichment_finished.connect(self._on_bulk_finished)
@@ -760,6 +769,9 @@ class MainWindow(QMainWindow):
             self._progress_dialog.setLabelText(
                 f"{message}\n\nProgress: {current} / {total}\n"
                 f"Updated: {stats.get('updated', 0)} | "
+                f"Metadata: {stats.get('metadata_completed', 0)} | "
+                f"Posters: {stats.get('poster_completed', 0)} "
+                f"(failed {stats.get('poster_failed', 0)}) | "
                 f"Cached: {stats.get('cached', 0)} | "
                 f"Failed: {stats.get('failed', 0)}"
             )

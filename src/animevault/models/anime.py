@@ -139,17 +139,11 @@ class Anime:
 
     # ── Persistence ────────────────────────────────────────────────
 
-    def save(self) -> Anime:
-        """Insert or update this record in the database.
+    def save(self, *, commit: bool = True) -> Anime:
+        """Insert or update this record, optionally deferring transaction commit.
 
-        If :attr:`id` is ``None`` an ``INSERT`` is performed and the new
-        id is assigned back to ``self``.  Otherwise an ``UPDATE`` is
-        executed.
-
-        Returns
-        -------
-        Anime
-            ``self`` (for method chaining).
+        ``commit=False`` supports the single-writer bulk importer, which
+        commits a bounded batch after several validated records are written.
         """
         genres_json = json.dumps(self.genres, ensure_ascii=False)
         studios_json = json.dumps(self.studios, ensure_ascii=False)
@@ -278,7 +272,8 @@ class Anime:
                     self.metadata_fetched_at,
                 ),
             )
-            conn.commit()
+            if commit:
+                conn.commit()
         return self
 
     @classmethod

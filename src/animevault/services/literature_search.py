@@ -12,6 +12,7 @@ from animevault.services.providers.literature import (
     AniListLiteratureProvider,
     LiteratureMetadata,
 )
+from animevault.services.providers.base import ProviderError
 
 logger = logging.getLogger(__name__)
 
@@ -49,18 +50,21 @@ class LiteratureSearchService:
     def providers(self) -> list:
         return self._providers
 
-    def search(self, query: str, limit: int = 15) -> list[LiteratureMetadata]:
+    def search(
+        self, query: str, limit: int = 15, *, force_refresh: bool = False
+    ) -> list[LiteratureMetadata]:
         q = (query or "").strip()
         if not q:
             return []
 
-        cache_key = f"search:literature:{q.casefold()}"
-        cached = cache.get(cache_key, ttl=cache.TTL_SEARCH)
+        cache_key = f"search:literature:{q.casefold()}:{int(limit)}"
+        cached = None if force_refresh else cache.get(cache_key, ttl=cache.TTL_METADATA)
         if cached is not None and isinstance(cached, list):
             return [LiteratureMetadata(**item) for item in cached]
 
         results: list[LiteratureMetadata] = []
         seen: set = set()
+        last_retryable_error: ProviderError | None = None
 
         for provider in self._providers:
             if not provider.is_available():
@@ -75,19 +79,28 @@ class LiteratureSearchService:
                         continue
                     seen.add(key)
                     results.append(meta)
+            except ProviderError as exc:
+                logger.warning("Literature provider %s failed: %s", provider.name, exc)
+                if exc.retryable:
+                    last_retryable_error = exc
+                continue
             except Exception as exc:
                 logger.warning("Literature provider %s failed: %s", provider.name, exc)
                 continue
+
+        if not results and last_retryable_error is not None:
+            raise last_retryable_error
 
         results.sort(
             key=lambda m: calculate_literature_match_score(q, m), reverse=True
         )
         results = results[:limit]
 
-        try:
-            cache.put(cache_key, [vars(m) for m in results])
-        except Exception:
-            pass
+        if results:
+            try:
+                cache.put(cache_key, [vars(m) for m in results])
+            except Exception:
+                pass
         return results
 
     def find_duplicate(self, meta: LiteratureMetadata) -> Optional[Literature]:

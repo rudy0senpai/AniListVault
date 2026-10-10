@@ -81,6 +81,26 @@ class TestSearchAndMatching:
 
         assert score_exact > score_sequel > score_spinoff
 
+    def test_empty_result_is_not_cached_as_a_transient_failure(self):
+        provider = DummyProvider("mock", [])
+        service = SearchService(providers=[provider])
+
+        service.search("Temporarily unavailable title")
+        service.search("Temporarily unavailable title")
+
+        assert provider.call_count == 2
+
+    def test_force_refresh_bypasses_successful_cache(self):
+        first = AnimeMetadata(title="Title", anilist_id=1, synopsis="old")
+        refreshed = AnimeMetadata(title="Title", anilist_id=1, synopsis="new")
+        provider = DummyProvider("mock", [first])
+        service = SearchService(providers=[provider])
+
+        assert service.search("Title")[0].synopsis == "old"
+        provider._results = [refreshed]
+        assert service.search("Title", force_refresh=True)[0].synopsis == "new"
+        assert provider.call_count == 2
+
     def test_search_results_cached(self):
         meta = AnimeMetadata(title="Frieren", anilist_id=154587, episodes=28, source_provider="mock")
         provider = DummyProvider("mock", [meta])

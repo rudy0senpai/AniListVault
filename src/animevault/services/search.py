@@ -73,14 +73,16 @@ class SearchService:
     def providers(self) -> list[BaseProvider]:
         return self._providers
 
-    def search(self, query: str, limit: int = 15) -> list[AnimeMetadata]:
+    def search(
+        self, query: str, limit: int = 15, *, force_refresh: bool = False
+    ) -> list[AnimeMetadata]:
         """Search across providers in priority order with caching and scoring."""
         q = query.strip()
         if not q:
             return []
 
-        cache_key = f"search:multi:{q.lower()}"
-        cached = cache.get(cache_key, ttl=cache.TTL_SEARCH)
+        cache_key = f"search:multi:{q.casefold()}:{int(limit)}"
+        cached = None if force_refresh else cache.get(cache_key, ttl=cache.TTL_METADATA)
         if cached is not None and isinstance(cached, list):
             logger.debug("Cache hit for search %r", q)
             # Reconstruct AnimeMetadata objects from cached dicts
@@ -88,6 +90,7 @@ class SearchService:
 
         all_results: list[AnimeMetadata] = []
         seen_keys: set[str] = set()
+        last_retryable_error: ProviderError | None = None
 
         for provider in self._providers:
             if not provider.is_available():
@@ -113,20 +116,26 @@ class SearchService:
                     break
             except ProviderError as exc:
                 logger.warning("Provider %s error searching %r: %s", provider.name, q, exc)
+                if exc.retryable:
+                    last_retryable_error = exc
                 continue
             except Exception as exc:
                 logger.warning("Unexpected error from %s: %s", provider.name, exc)
                 continue
 
+        # A failed search must not be treated as a durable not-found response.
+        if not all_results and last_retryable_error is not None:
+            raise last_retryable_error
+
         # Rank results by match score
         all_results.sort(key=lambda r: calculate_match_score(q, r), reverse=True)
         final_results = all_results[:limit]
 
-        # Cache results as dicts
-        try:
-            cache.put(cache_key, [vars(r) for r in final_results])
-        except Exception:
-            pass
+        if final_results:
+            try:
+                cache.put(cache_key, [vars(r) for r in final_results])
+            except Exception:
+                pass
 
         return final_results
 

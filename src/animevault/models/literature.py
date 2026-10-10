@@ -125,8 +125,8 @@ class Literature:
 
     # ── Persistence ────────────────────────────────────────────────
 
-    def save(self) -> Literature:
-        """Insert or update this record and its metadata companion."""
+    def save(self, *, commit: bool = True) -> Literature:
+        """Insert or update this record; optionally defer transaction commit."""
         genres_json = json.dumps(self.genres, ensure_ascii=False)
         synonyms_json = json.dumps(self.synonyms, ensure_ascii=False)
         authors_json = json.dumps(self.authors, ensure_ascii=False)
@@ -263,7 +263,8 @@ class Literature:
                     self.metadata_fetched_at,
                 ),
             )
-            conn.commit()
+            if commit:
+                conn.commit()
         return self
 
     @classmethod

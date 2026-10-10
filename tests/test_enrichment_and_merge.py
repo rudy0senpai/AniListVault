@@ -128,6 +128,17 @@ class TestEnrichmentAndMerge:
         assert found is not None
         assert found.id == existing.id
 
+    def test_model_saves_can_join_a_caller_managed_batch(self, isolated_database):
+        from animevault.database import get_connection
+
+        anime = Anime.create(title="Batchable")
+        anime.notes = "metadata refresh"
+        anime.save(commit=False)
+        with get_connection() as connection:
+            connection.commit()
+
+        assert Anime.find_by_id(anime.id).notes == "metadata refresh"
+
     def test_full_save_and_reload_roundtrip(self, isolated_database):
         anime = Anime.create(
             title="Naruto",

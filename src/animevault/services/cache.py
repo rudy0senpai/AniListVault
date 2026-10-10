@@ -8,6 +8,7 @@ import logging
 import os
 import time
 from pathlib import Path
+from threading import Lock
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -20,6 +21,8 @@ _CACHE_DIR: Path = (
 TTL_SEARCH: float = 600.0       # 10 minutes
 TTL_METADATA: float = 86400.0   # 24 hours
 TTL_POSTER: Optional[float] = None  # Persistent (no expiry)
+_write_locks: dict[str, Lock] = {}
+_write_locks_guard = Lock()
 
 
 def set_cache_dir(path: Path) -> None:
@@ -62,11 +65,20 @@ def put(key: str, payload: Any) -> None:
     try:
         _CACHE_DIR.mkdir(parents=True, exist_ok=True)
         path = _key_to_path(key)
-        data = {"_cached_at": time.time(), "_payload": payload}
-        path.write_text(
-            json.dumps(data, ensure_ascii=False, default=str),
-            encoding="utf-8",
-        )
+        with _write_locks_guard:
+            lock = _write_locks.setdefault(str(path), Lock())
+        with lock:
+            data = {"_cached_at": time.time(), "_payload": payload}
+            temporary = path.with_name(f"{path.name}.{os.getpid()}.{time.time_ns()}.tmp")
+            try:
+                temporary.write_text(
+                    json.dumps(data, ensure_ascii=False, default=str),
+                    encoding="utf-8",
+                )
+                os.replace(temporary, path)
+            finally:
+                if temporary.exists():
+                    temporary.unlink()
     except Exception as exc:
         logger.debug("Cache write error for %r: %s", key, exc)
 
