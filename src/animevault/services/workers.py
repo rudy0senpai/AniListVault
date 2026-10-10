@@ -25,7 +25,6 @@ from animevault.database import get_connection
 from animevault.services.diagnostics import failure_record, sanitize_error
 from animevault.services.enrichment import merge_metadata_into_anime, pick_best_match
 from animevault.services.import_tree import EntryNode, FetchScheduler, ImportTree, NodeState
-from animevault.services.literature_search import calculate_literature_match_score
 from animevault.services.poster import download_poster
 from animevault.services.providers.base import AnimeMetadata
 from animevault.services.search import SearchService
@@ -97,6 +96,8 @@ _thread_services = local()
 class _MetadataOutcome:
     metadata: object
     cache_hit: bool
+    reason: str = ""
+    report: dict | None = None
 
 
 class BulkEnrichmentWorker(QThread):
@@ -157,6 +158,9 @@ class BulkEnrichmentWorker(QThread):
         stats = {
             "total": 0, "total_tasks": 0, "processed": 0, "updated": 0, "cached": 0,
             "skipped_complete": 0, "failed": 0, "not_found": 0,
+            "ambiguous_candidates": 0, "low_confidence_candidates": 0,
+            "provider_unavailable": 0, "provider_rate_limited": 0,
+            "no_candidate_found": 0,
             "permanently_unresolved": 0,
             "posters": 0, "metadata_completed": 0, "poster_completed": 0,
             "poster_failed": 0, "retry_attempts": 0, "failure_details": [],
@@ -281,13 +285,18 @@ class BulkEnrichmentWorker(QThread):
                         continue
                     related = node_items[node.stable_id]
                     if isinstance(result, _MetadataOutcome):
-                        if result.cache_hit:
+                        outcome = result
+                        if outcome.cache_hit:
                             stats["cached"] += len(related)
-                        result = result.metadata
+                        result = outcome.metadata
+                        result_reason = outcome.reason
+                        result_report = outcome.report or {}
+                    else:
+                        result_reason, result_report = "", {}
                     if error is not None:
                         self._mark_failed(node, error, stats, related[0])
                     elif result is None:
-                        self._mark_not_found(node, stats, related[0])
+                        self._mark_not_found(node, stats, related[0], category=result_reason, report=result_report)
                     else:
                         try:
                             self._validate_result(related[0], result)
@@ -424,13 +433,28 @@ class BulkEnrichmentWorker(QThread):
             cls._record_failure(stats, item, node, error)
 
     @classmethod
-    def _mark_not_found(cls, node: EntryNode, stats: dict, item=None) -> None:
+    def _mark_not_found(cls, node: EntryNode, stats: dict, item=None, *, category="no_candidate_found", report=None) -> None:
         message = "No matching metadata found"
+        category = category or "no_candidate_found"
+        if category in ("provider_temporarily_unavailable", "provider_rate_limited", "provider_error"):
+            stats["failed"] += 1
+            stats["provider_rate_limited" if category == "provider_rate_limited" else "provider_unavailable"] += 1
+        else:
+            stats["not_found"] += 1
+            stats["ambiguous_candidates" if category == "ambiguous_candidates" else "low_confidence_candidates" if category == "low_confidence_candidates" else "no_candidate_found"] += 1
         node.error = message
         node.state = node.metadata_state = NodeState.FAILED
-        stats["not_found"] += 1
         if item is not None:
-            cls._record_failure(stats, item, node, message)
+            record = failure_record(item=item, node=node, error=message, provider="provider-chain")
+            record["category"] = category or "no_candidate_found"
+            report = report or {}
+            record["providers_searched"] = report.get("providers_searched", [])
+            record["search_variants"] = report.get("variants", [])
+            record["search_queries"] = report.get("queries", [])
+            record["candidates"] = report.get("candidates", [])
+            record["provider_errors"] = report.get("errors", [])
+            record["providers_not_configured"] = report.get("providers_not_configured", [])
+            stats["failure_details"].append(record)
 
 
     @staticmethod
@@ -443,11 +467,11 @@ class BulkEnrichmentWorker(QThread):
             if service is None:
                 service = LiteratureSearchService()
                 _thread_services.literature = service
-            candidates = service.search(item.title, limit=5, force_refresh=force_refresh)
-            if not candidates:
-                return _MetadataOutcome(None, bool(service.last_cache_hit))
-            best = max(candidates, key=lambda meta: calculate_literature_match_score(item.title, meta))
-            return _MetadataOutcome(best, bool(service.last_cache_hit))
+            aliases = [item.title_en, item.title_native, *item.synonyms]
+            best = service.find_reliable_match(item.title, force_refresh=force_refresh, aliases=aliases,
+                expected_category=item.category, authors=item.authors, year=(item.started_at or "")[:4] or None,
+                anilist_id=item.anilist_id)
+            return _MetadataOutcome(best, bool(service.last_cache_hit), service.last_outcome, dict(service.last_search_report))
         service = getattr(_thread_services, "anime", None)
         if service is None:
             service = SearchService()
@@ -484,10 +508,17 @@ class BulkEnrichmentWorker(QThread):
                 setattr(item, attr, value)
                 changed = True
         for attr in (
-            "synopsis", "format", "pub_status", "origin_country",
+            "title_en", "title_native", "synopsis", "format", "pub_status", "origin_country",
             "started_at", "ended_at", "cover_url",
         ):
             fill(attr, getattr(best, attr, ""))
+        if getattr(best, "synonyms", None):
+            existing = {str(value).casefold() for value in item.synonyms}
+            for value in best.synonyms:
+                if value and value.casefold() not in existing:
+                    item.synonyms.append(value)
+                    existing.add(value.casefold())
+                    changed = True
         for attr in ("chapters", "volumes"):
             value = getattr(best, attr, 0)
             if value and not getattr(item, attr):

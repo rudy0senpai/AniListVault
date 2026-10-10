@@ -11,6 +11,21 @@ from animevault.services.search import SearchService
 
 
 class TestEnrichmentAndMerge:
+    def test_literature_metadata_merge_keeps_original_title_and_personal_fields(self):
+        from animevault.services.providers.literature import LiteratureMetadata
+        from animevault.services.workers import BulkEnrichmentWorker
+        from animevault.models.literature import Literature
+
+        item = Literature(id=None, title="Kusuriya no Hitorigoto", status="completed", tier="S", notes="personal", chapters_read=25, favorite=True)
+        meta = LiteratureMetadata(title="Kusuriya no Hitorigoto", title_en="The Apothecary Diaries", synonyms=["Drugstore Notes"], chapters=50)
+
+        BulkEnrichmentWorker._merge_literature(item, meta)
+
+        assert item.title == "Kusuriya no Hitorigoto"
+        assert item.title_en == "The Apothecary Diaries"
+        assert item.synonyms == ["Drugstore Notes"]
+        assert (item.status, item.tier, item.notes, item.chapters_read, item.favorite) == ("completed", "S", "personal", 25, True)
+
     def test_anime_from_metadata_creates_unsaved_anime(self):
         meta = AnimeMetadata(
             title="Steins;Gate",

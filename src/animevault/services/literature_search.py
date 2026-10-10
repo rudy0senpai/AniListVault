@@ -17,7 +17,6 @@ from animevault.services.diagnostics import sanitize_error
 
 logger = logging.getLogger(__name__)
 
-
 def calculate_literature_match_score(query: str, meta: LiteratureMetadata) -> float:
     """Rank candidates by title similarity (higher is better)."""
     q = (query or "").strip().casefold()
@@ -121,3 +120,12 @@ class LiteratureSearchService:
                 if found is not None:
                     return found
         return None
+
+
+# The conservative resolver is shared by bulk enrichment and search UI.
+from animevault.services.literature_discovery import (  # noqa: E402
+    LiteratureSearchService,
+    calculate_literature_match_score,
+    normalize_search_variants,
+    build_search_variants,
+)

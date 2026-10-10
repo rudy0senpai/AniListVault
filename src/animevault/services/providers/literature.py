@@ -108,6 +108,10 @@ class LiteratureMetadata:
     mal_id: Optional[int] = None
     kitsu_id: Optional[str] = None
     source_provider: str = "anilist"
+    # Search provenance is transient/cache metadata, not a library title.
+    search_query: str = ""
+    search_provider: str = ""
+    provider_ids: dict[str, str] = field(default_factory=dict)
 
     def display_title(self) -> str:
         """Best English-facing title for display and storage.

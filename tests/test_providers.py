@@ -14,6 +14,10 @@ from animevault.services.providers.base import AnimeMetadata, ProviderError
 from animevault.services.providers.jikan import JikanProvider, normalize_entry as normalize_jikan
 from animevault.services.providers.kitsu import KitsuProvider, normalize_entry as normalize_kitsu
 from animevault.services.providers.tmdb import TmdbProvider, normalize_tv
+from animevault.services.providers.manga_sources import (
+    normalize_kitsu_manga,
+    normalize_mangadex,
+)
 
 
 class TestAniListProvider:
@@ -175,3 +179,52 @@ class TestTmdbProvider:
         with pytest.raises(ProviderError) as exc:
             provider.search("Naruto")
         assert "not configured" in str(exc.value)
+
+
+def test_mangadex_normalization_keeps_alternate_titles_and_cross_ids():
+    meta = normalize_mangadex({
+        "id": "md-1",
+        "attributes": {
+            "title": {"en": "Example Manhwa"},
+            "altTitles": [{"ko": "예시 웹툰"}, {"en": "Example Webtoon"}],
+            "originalLanguage": "ko",
+            "links": {"al": "42", "mal": "84"},
+            "description": {"en": "Story"},
+            "status": "ongoing",
+            "tags": [],
+        },
+        "relationships": [{"type": "cover_art", "attributes": {"fileName": "cover.png"}}],
+    })
+    assert meta.title_en == "Example Manhwa"
+    assert "Example Webtoon" in meta.synonyms
+    assert meta.category == "manhwa"
+    assert meta.anilist_id == 42 and meta.mal_id == 84
+    assert meta.cover_url.endswith("/md-1/cover.png.512.jpg")
+
+
+def test_mangadex_non_english_original_is_not_falsely_labeled_english_and_keeps_credits():
+    meta = normalize_mangadex({
+        "id": "md-2",
+        "attributes": {"title": {"ko": "한국어 제목"}, "originalLanguage": "ko", "links": {}},
+        "relationships": [
+            {"type": "author", "attributes": {"name": "Writer"}},
+            {"type": "artist", "attributes": {"name": "Artist"}},
+        ],
+    })
+
+    assert meta.title == "한국어 제목"
+    assert meta.title_en == ""
+    assert meta.authors == ["Writer"]
+    assert meta.artists == ["Artist"]
+
+
+def test_kitsu_manga_normalization_maps_manga_fields():
+    meta = normalize_kitsu_manga({"id": "k-1", "attributes": {
+        "canonicalTitle": "Example", "titles": {"en": "Example", "ja_jp": "例"},
+        "chapterCount": 12, "volumeCount": 2, "status": "finished",
+        "posterImage": {"original": "https://img.example/cover.jpg"},
+    }})
+    assert meta.title == "Example"
+    assert meta.kitsu_id == "k-1"
+    assert meta.chapters == 12 and meta.volumes == 2
+    assert meta.cover_url == "https://img.example/cover.jpg"

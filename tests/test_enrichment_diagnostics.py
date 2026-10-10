@@ -49,6 +49,6 @@ def test_no_match_is_unresolved_not_metadata_failure(isolated_database, tmp_path
     stats = outcomes[0]
     assert stats["not_found"] == 1
     assert stats["failed"] == 0
-    assert stats["failure_details"][0]["category"] == "no_matching_title"
+    assert stats["failure_details"][0]["category"] == "no_candidate_found"
     saved = Anime.find_by_id(item.id)
     assert (saved.status, saved.score, saved.notes) == ("completed", 8.0, "personal")

@@ -834,7 +834,8 @@ class MainWindow(QMainWindow):
             f"Metadata updated: {stats.get('updated', 0)}  |  Cache hits: {stats.get('cached', 0)}\n"
             f"Already complete/skipped: {stats.get('skipped_complete', 0)}\n"
             f"Posters downloaded: {stats.get('poster_completed', 0)}  |  Poster failures: {stats.get('poster_failed', 0)}\n"
-            f"Metadata failures: {stats.get('failed', 0)}  |  No matching title: {stats.get('not_found', 0)}  |  Permanently unresolved: {stats.get('permanently_unresolved', 0)}\n"
+            f"Metadata failures: {stats.get('failed', 0)}  |  No reliable title match: {stats.get('not_found', 0)}  |  Permanently unresolved: {stats.get('permanently_unresolved', 0)}\n"
+            f"Discovery: {stats.get('no_candidate_found', 0)} no candidates, {stats.get('low_confidence_candidates', 0)} low confidence, {stats.get('ambiguous_candidates', 0)} ambiguous, {stats.get('provider_unavailable', 0)} unavailable, {stats.get('provider_rate_limited', 0)} rate limited\n"
             f"Retries: {stats.get('retry_attempts', 0)}  |  Cancelled: {stats.get('cancelled', 0)}"
         )
         dialog = QMessageBox(self)
