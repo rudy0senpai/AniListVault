@@ -219,7 +219,32 @@ class TestDashboard:
         data = compute_dashboard(Anime.all(), Literature.all())
         assert data["anime"] == 2
         assert data["literature"] == 1
+        assert data["by_category"] == {
+            MEDIA_ANIME: 2,
+            MEDIA_MANGA: 0,
+            MEDIA_MANHWA: 1,
+            MEDIA_MANHUA: 0,
+        }
         assert dict(data["genres"])["Action"] == 3
+
+    def test_category_summaries_cover_anime_and_all_literature_types(self, qt_app, migrated_database):
+        from animevault.models.anime import Anime
+        from animevault.models.literature import Literature
+        from animevault.ui.overview_panel import OverviewPanel
+
+        anime = [Anime.create(title="Show", status="watching")]
+        library = [
+            Literature.create(title="Manga", category=MEDIA_MANGA, status="watching"),
+            Literature.create(title="Manhwa", category=MEDIA_MANHWA, status="completed"),
+            Literature.create(title="Manhua", category=MEDIA_MANHUA, status="plan_to_watch"),
+        ]
+        panel = OverviewPanel()
+        panel.refresh(anime, library)
+
+        assert "Watching 1" in panel._category_details[MEDIA_ANIME].text()
+        assert "Reading 1" in panel._category_details["manga"].text()
+        assert "Completed 1" in panel._category_details["manhwa"].text()
+        assert "Planned 1" in panel._category_details["manhua"].text()
 
     def test_tier_distribution_covers_full_scale(self, qt_app, migrated_database):
         from animevault.models.anime import Anime

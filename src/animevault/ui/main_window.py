@@ -118,14 +118,54 @@ class MainWindow(QMainWindow):
         self._grid = CardGrid()
         body.addWidget(self._grid, 1)
 
+        self._overview_container = QWidget()
+        overview_layout = QVBoxLayout(self._overview_container)
+        overview_layout.setContentsMargins(0, 0, 0, 0)
+        overview_layout.setSpacing(2)
+        overview_header = QWidget()
+        overview_header.setObjectName("overviewHeader")
+        overview_header_layout = QHBoxLayout(overview_header)
+        overview_header_layout.setContentsMargins(14, 8, 14, 0)
+        overview_header_layout.setSpacing(8)
+        overview_title = QLabel("Overview")
+        overview_title.setObjectName("panelTitle")
+        overview_header_layout.addWidget(overview_title)
+        overview_header_layout.addStretch(1)
+        self._overview_toggle = QPushButton(">>")
+        self._overview_toggle.setObjectName("overviewToggle")
+        self._overview_toggle.setFixedSize(34, 28)
+        self._overview_toggle.setToolTip("Hide overview")
+        self._overview_toggle.setAccessibleName("Hide overview")
+        self._overview_toggle.clicked.connect(self._toggle_overview)
+        overview_header_layout.addWidget(self._overview_toggle)
+        overview_layout.addWidget(overview_header)
+
         self._overview = OverviewPanel()
-        body.addWidget(self._overview)
+        overview_layout.addWidget(self._overview, 1)
+        body.addWidget(self._overview_container)
 
         outer.addLayout(body, 1)
 
         # Keep the background sized to the window, and behind the content.
         self._background.lower()
         central.installEventFilter(self)
+
+    def _toggle_overview(self) -> None:
+        """Collapse the analytics sidebar while leaving a reopen control visible."""
+        hidden = not self._overview.isHidden()
+        self._overview.setVisible(not hidden)
+        if hidden:
+            self._overview_container.setFixedWidth(130)
+            self._overview_toggle.setText("<<")
+            self._overview_toggle.setToolTip("Show overview")
+            self._overview_toggle.setAccessibleName("Show overview")
+        else:
+            self._overview_container.setMinimumWidth(0)
+            self._overview_container.setMaximumWidth(16777215)
+            self._overview_container.setMinimumWidth(230)
+            self._overview_toggle.setText(">>")
+            self._overview_toggle.setToolTip("Hide overview")
+            self._overview_toggle.setAccessibleName("Hide overview")
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)

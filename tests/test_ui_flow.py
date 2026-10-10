@@ -20,6 +20,19 @@ class TestUIFlow:
     def setup_class(cls):
         cls.app = QApplication.instance() or QApplication([])
 
+    def test_overview_can_hide_and_reopen(self, migrated_database):
+        from animevault.ui.main_window import MainWindow
+
+        window = MainWindow()
+        assert window._overview_toggle.text() == ">>"
+        window._overview_toggle.click()
+        assert window._overview.isHidden()
+        assert window._overview_toggle.text() == "<<"
+        window._overview_toggle.click()
+        assert not window._overview.isHidden()
+        assert window._overview_toggle.text() == ">>"
+        window.close()
+
     def test_add_anime_dialog_manual_entry(self, isolated_database):
         dlg = AddAnimeDialog()
         dlg._title_edit.setText("Cowboy Bebop")

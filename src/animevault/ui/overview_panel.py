@@ -223,6 +223,7 @@ class OverviewPanel(QScrollArea):
         self.setWidget(self._host)
 
         self._rows: dict[str, _StatRow] = {}
+        self._category_details: dict[str, QLabel] = {}
         self._build_static_panels()
 
     def apply_theme(self) -> None:
@@ -246,7 +247,7 @@ class OverviewPanel(QScrollArea):
 
     def _build_static_panels(self) -> None:
         # ── Overview counts ───────────────────────────────────────
-        frame, layout = _panel("Overview")
+        frame, layout = _panel("Library Totals")
         for key, label, dot in [
             ("anime", "Number of Anime", None),
             ("watching", "Anime (Watching)", _STATUS_DOTS["watching"]),
@@ -268,6 +269,18 @@ class OverviewPanel(QScrollArea):
             row = _StatRow(label, color)
             self._rows[key] = row
             layout.addWidget(row)
+            detail = QLabel("Reading 0 · Completed 0 · Planned 0")
+            detail.setObjectName("categoryStatusSummary")
+            detail.setWordWrap(True)
+            detail.setStyleSheet(f"color:{theme_tokens.TEXT_MUTED}; font-size:11px;")
+            self._category_details[key] = detail
+            layout.addWidget(detail)
+        anime_detail = QLabel("Watching 0 · Completed 0 · Planned 0")
+        anime_detail.setObjectName("categoryStatusSummary")
+        anime_detail.setWordWrap(True)
+        anime_detail.setStyleSheet(f"color:{theme_tokens.TEXT_MUTED}; font-size:11px;")
+        self._category_details[MEDIA_ANIME] = anime_detail
+        self._rows["plan"].parentWidget().layout().addWidget(anime_detail)
         self._layout.addWidget(frame)
 
         # ── Genres ───────────────────────────────────────────────
@@ -294,6 +307,29 @@ class OverviewPanel(QScrollArea):
         self._rows["manga"].set_value(lit_counts.get(MEDIA_MANGA, 0))
         self._rows["manhwa"].set_value(lit_counts.get(MEDIA_MANHWA, 0))
         self._rows["manhua"].set_value(lit_counts.get(MEDIA_MANHUA, 0))
+
+        self._category_details[MEDIA_ANIME].setText(
+            "Watching {watching} · Completed {completed} · Planned {planned}".format(
+                watching=anime_status.get("watching", 0),
+                completed=anime_status.get("completed", 0),
+                planned=anime_status.get("plan_to_watch", 0),
+            )
+        )
+        for category, key in (
+            (MEDIA_MANGA, "manga"),
+            (MEDIA_MANHWA, "manhwa"),
+            (MEDIA_MANHUA, "manhua"),
+        ):
+            category_status = Counter(
+                item.status for item in literature if item.category == category
+            )
+            self._category_details[key].setText(
+                "Reading {reading} · Completed {completed} · Planned {planned}".format(
+                    reading=category_status.get("watching", 0),
+                    completed=category_status.get("completed", 0),
+                    planned=category_status.get("plan_to_watch", 0),
+                )
+            )
 
         self._refresh_genres(animes, literature)
         self._refresh_tiers(animes, literature)
@@ -369,9 +405,16 @@ def compute_dashboard(animes: Optional[list] = None, literature: Optional[list] 
     for item in literature:
         if item.tier:
             tiers[item.tier] += 1
+    by_category = {
+        MEDIA_ANIME: len(animes),
+        MEDIA_MANGA: sum(1 for item in literature if item.category == MEDIA_MANGA),
+        MEDIA_MANHWA: sum(1 for item in literature if item.category == MEDIA_MANHWA),
+        MEDIA_MANHUA: sum(1 for item in literature if item.category == MEDIA_MANHUA),
+    }
     return {
         "anime": len(animes),
         "literature": len(literature),
+        "by_category": by_category,
         "genres": genres.most_common(),
         "tiers": {t: tiers.get(t, 0) for t in TIERS},
     }
