@@ -16,6 +16,8 @@ from PySide6.QtCore import QObject, Qt, QUrl, Signal
 from PySide6.QtGui import QColor, QLinearGradient, QPainter, QPixmap
 from PySide6.QtWidgets import QWidget
 
+from animevault.ui import theme as theme_tokens
+
 logger = logging.getLogger(__name__)
 
 #: Opacity of the video, keeping the dark UI legible on top.
@@ -103,6 +105,11 @@ class _VideoPlayer(QObject):
         except Exception as exc:
             logger.debug("Frame conversion failed: %s", exc)
 
+    def set_paused(self, paused: bool) -> None:
+        player = getattr(self, "_player", None)
+        if player is not None:
+            player.pause() if paused else player.play()
+
     def stop(self) -> None:
         player = getattr(self, "_player", None)
         if player is not None:
@@ -130,6 +137,7 @@ class VideoBackground(QWidget):
         self._pixmap: Optional[QPixmap] = None
         self._player: Optional[_VideoPlayer] = None
         self._status = "starting"
+        self._effects_reduced = False
 
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
@@ -164,6 +172,13 @@ class VideoBackground(QWidget):
         """One of: playing, failed, missing, starting."""
         return self._status
 
+    def set_effects_reduced(self, reduced: bool) -> None:
+        """Pause decorative video and remove its glow while effects are reduced."""
+        self._effects_reduced = bool(reduced)
+        if self._player is not None:
+            self._player.set_paused(self._effects_reduced)
+        self.update()
+
     def shutdown(self) -> None:
         """Stop playback and release decoder resources."""
         if self._player is not None:
@@ -176,14 +191,16 @@ class VideoBackground(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
 
-        # Always paint a dark gradient first: this is what shows through
-        # while loading, and what remains if decoding fails.
-        gradient = QLinearGradient(0, 0, 0, max(1, self.height()))
-        gradient.setColorAt(0.0, QColor("#0d1117"))
-        gradient.setColorAt(1.0, QColor("#111820"))
-        painter.fillRect(self.rect(), gradient)
+        # Paint a solid base for reduced-effects mode, otherwise the theme gradient.
+        if self._effects_reduced:
+            painter.fillRect(self.rect(), QColor(theme_tokens.BG_DEEP))
+        else:
+            gradient = QLinearGradient(0, 0, 0, max(1, self.height()))
+            gradient.setColorAt(0.0, QColor(theme_tokens.BG_DEEP))
+            gradient.setColorAt(1.0, QColor(theme_tokens.BG_PANEL))
+            painter.fillRect(self.rect(), gradient)
 
-        if self._pixmap is not None and not self._pixmap.isNull():
+        if not self._effects_reduced and self._pixmap is not None and not self._pixmap.isNull():
             painter.setOpacity(self._opacity)
             scaled = self._pixmap.scaled(
                 self.size(),
@@ -194,7 +211,7 @@ class VideoBackground(QWidget):
             y = (scaled.height() - self.height()) // 2
             painter.drawPixmap(-x, -y, scaled)
             painter.setOpacity(1.0)
-        else:
+        elif not self._effects_reduced:
             # Soft cyan glow so the empty state still looks designed.
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QColor(34, 211, 238, 16))

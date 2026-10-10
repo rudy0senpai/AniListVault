@@ -32,9 +32,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from animevault.ui import theme as theme_tokens
 from animevault.ui.theme import (
-    BORDER,
-    TEXT_MUTED,
     tier_badge_style,
     tier_color,
     status_badge_style,
@@ -87,8 +86,8 @@ class _PosterLabel(QLabel):
             painter.drawPixmap(QPoint(-x, 0), scaled)
             painter.restore()
         else:
-            painter.fillPath(path, QColor("#0f141b"))
-            painter.setPen(QColor(TEXT_MUTED))
+            painter.fillPath(path, QColor(theme_tokens.BG_INPUT))
+            painter.setPen(QColor(theme_tokens.TEXT_MUTED))
             # A default QFont can carry a pixel size (-1 point), which Qt
             # rejects; set both explicitly so the placeholder renders.
             font = QFont()
@@ -96,7 +95,7 @@ class _PosterLabel(QLabel):
             painter.setFont(font)
             painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "▦")
 
-        painter.setPen(QColor(BORDER))
+        painter.setPen(QColor(theme_tokens.BORDER))
         painter.drawPath(path)
         painter.end()
 
@@ -188,7 +187,7 @@ class MediaCard(QFrame):
 
         self._menu_button = QLabel("⋮")
         self._menu_button.setStyleSheet(
-            f"color:{TEXT_MUTED}; font-size:15px; padding:0 4px;"
+            f"color:{theme_tokens.TEXT_MUTED}; font-size:15px; padding:0 4px;"
         )
         self._menu_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self._menu_button.setToolTip("More actions")

@@ -24,8 +24,10 @@ def create_app() -> QApplication:
     app = QApplication.instance()
     if app is None:
         app = QApplication([])
-        app.setApplicationName("AnimeVault")
-        app.setOrganizationName("AnimeVault")
+
+    # Stable identifiers for QSettings, also when a QApplication already exists.
+    app.setApplicationName("AnimeVault")
+    app.setOrganizationName("AnimeVault")
 
     # Window / taskbar / installer icon.
     if ICON_PATH.exists():
@@ -33,10 +35,12 @@ def create_app() -> QApplication:
         if not icon.isNull():
             app.setWindowIcon(icon)
 
-    # Apply the dark visual theme.
-    from animevault.ui.theme import build_stylesheet
+    # Restore appearance before any window is constructed or shown.
+    from animevault.ui.theme import ThemeManager
 
-    app.setStyleSheet(build_stylesheet())
+    manager = ThemeManager.instance(app)
+    manager.restore()
+    manager.set_reduce_effects(manager.reduce_effects)
 
     # Make sure the database and schema exist before the first window
     # is shown, then bring the schema up to the current version.

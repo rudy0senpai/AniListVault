@@ -1,35 +1,160 @@
-"""Dark theme: colour palette, QSS stylesheet and badge helpers.
+"""Central theme registry, runtime theme manager, QSS and badge helpers.
 
-Kept in one module so the visual language is defined in a single place
-rather than scattered across widgets.  Qt stylesheets cannot express
-everything (notably gradients on arbitrary widgets), so the palette is
-also exposed as Python constants for custom painting.
+Theme colors stay in this module so existing UI imports remain compatible.
 """
 
 from __future__ import annotations
 
-# ── Palette ───────────────────────────────────────────────────────
+from dataclasses import dataclass
 
-BG_DEEP = "#0d1117"        # window background
-BG_PANEL = "#151b23"       # panels, cards
-BG_PANEL_HI = "#1c232d"    # hover / raised
-BG_INPUT = "#11161d"       # inputs, search field
+from PySide6.QtCore import QObject, QSettings, Signal
+from PySide6.QtWidgets import QApplication
 
-BORDER = "#232b36"
-BORDER_HI = "#2f3a47"
 
-ACCENT = "#22d3ee"         # cyan — primary accent
-ACCENT_DIM = "#0891b2"
-ACCENT_DEEP = "#0e7490"
+@dataclass(frozen=True)
+class ThemeDefinition:
+    id: str
+    name: str
+    category: str
+    description: str
+    background: str
+    panel: str
+    panel_hover: str
+    input: str
+    border: str
+    border_hover: str
+    accent: str
+    accent_dim: str
+    accent_deep: str
+    text: str
+    text_secondary: str
+    text_muted: str
+    text_on_accent: str
+    danger: str = "#f87171"
+    success: str = "#4ade80"
+    warning: str = "#fbbf24"
 
-TEXT_PRIMARY = "#e6edf3"
-TEXT_SECONDARY = "#9aa7b4"
-TEXT_MUTED = "#6b7784"
-TEXT_ON_ACCENT = "#04222a"
 
+# Stable IDs are suitable for QSettings and future user-defined theme files.
+_THEME_ROWS = [
+    ("minimal-simple", "Minimal Simple", "CORE", "Clean, restrained dark surfaces.", "#111318", "#181b21", "#20242c", "#15181e", "#2b303a", "#3a414d", "#4f8cff", "#3975df", "#285bb8", "#f5f7fa", "#b5bdc8", "#818a97", "#ffffff"),
+    ("minimal-light", "Minimal Light", "CORE", "Bright neutral surfaces and clear blue accents.", "#f5f6f8", "#ffffff", "#edf0f4", "#f8f9fb", "#d9dee7", "#b8c1cf", "#2878e5", "#1e63c2", "#174e9b", "#202632", "#505b6b", "#707b8a", "#ffffff"),
+    ("amoled-dark", "AMOLED Dark", "CORE", "Near-black OLED-friendly surfaces.", "#000000", "#08090b", "#121417", "#070809", "#202329", "#333841", "#5b91ff", "#3f70d4", "#2c55a9", "#f5f7fa", "#adb4bf", "#727a86", "#ffffff"),
+    ("anime-night", "Anime Night", "ANIME", "Midnight navy with cool blue highlights.", "#101326", "#191d36", "#24294a", "#14182d", "#303657", "#444d78", "#7c83ff", "#5d63d8", "#454bb3", "#f2f2ff", "#b4b8d6", "#858bad", "#ffffff"),
+    ("japanese-sunset", "Japanese Sunset", "ANIME", "Dusk purple balanced with warm sunset orange.", "#171424", "#241d32", "#33263d", "#1c1729", "#40344c", "#59465e", "#ff9a62", "#df7545", "#b45734", "#fff4ee", "#d1b9bd", "#a48d9a", "#241424"),
+    ("forest-shrine", "Forest Shrine", "ANIME", "Deep forest greens and muted natural tones.", "#101813", "#19241c", "#243329", "#141d17", "#2d3d31", "#405644", "#8daf72", "#6b9255", "#4e713d", "#eff5eb", "#b7c5b1", "#879883", "#142015"),
+    ("sakura-blue", "Sakura Blue", "ANIME", "Blue night surfaces with soft sakura pink.", "#101827", "#192438", "#24324a", "#141f30", "#2d3b52", "#40536f", "#f09ac8", "#d273a7", "#ad5489", "#f5f6ff", "#c0c8dd", "#909bb5", "#271824"),
+    ("sakura-light", "Sakura Light", "ANIME", "Elegant white, blush and pale blue.", "#fbf8fc", "#ffffff", "#f6edf6", "#fbf9fc", "#e8dce9", "#d6c3da", "#c45d9b", "#a94782", "#873669", "#302634", "#665b6b", "#887c8d", "#ffffff"),
+    ("moonlight-glass", "Moonlight Glass", "GLASS", "Cool moonlit blues with layered surfaces.", "#101828", "#19263a", "#24354b", "#142033", "#344761", "#4b6686", "#8cc8ff", "#67a9e4", "#4888c4", "#f2f7ff", "#bdcce0", "#8b9bb2", "#142033"),
+    ("sunset-glass", "Sunset Glass", "GLASS", "Warm rose, violet and amber accents.", "#21172a", "#302039", "#422a49", "#271b31", "#503b59", "#6c4c72", "#ff9b8e", "#e67878", "#c35b67", "#fff3f3", "#d8bdcf", "#a990a7", "#2b1b2b"),
+    ("cyber-anime", "Cyber Anime", "GLASS", "Dark library surfaces with restrained neon accents.", "#10121d", "#191c2b", "#252a3c", "#141725", "#34384d", "#4e5470", "#ff4f87", "#d73672", "#aa2357", "#f7f5ff", "#c2bfd6", "#918ea8", "#ffffff"),
+    ("warm-library", "Warm Library", "SPECIAL", "Parchment cream and archival brown.", "#211d18", "#302920", "#40372b", "#27221c", "#4d4133", "#645442", "#d6ad68", "#b58b4a", "#8d6935", "#f8f0df", "#d0c0a6", "#a9967b", "#251d12"),
+    ("one-piece", "One Piece-inspired", "SPECIAL", "Nautical parchment, ocean blue and warm gold.", "#17202a", "#222d36", "#303d46", "#1d2831", "#394954", "#506472", "#e4b95e", "#c69639", "#9d7428", "#f7f1e5", "#c7c2b4", "#969184", "#282114"),
+    ("nyarch", "Nyarch-inspired", "SPECIAL", "Aubergine surfaces with pastel pink and lavender.", "#1a1423", "#261d32", "#362743", "#201829", "#443650", "#5c496c", "#f29bd8", "#d477bc", "#b15898", "#faf2ff", "#d1bfdc", "#a590b4", "#281b2b"),
+    ("ubuntu", "Ubuntu-inspired", "SPECIAL", "Aubergine and orange in a warm desktop palette.", "#1b111b", "#291b29", "#38243a", "#211722", "#473447", "#604960", "#f28c28", "#d66b19", "#ad4f12", "#f7eef7", "#cbbdca", "#9b8c9b", "#281708"),
+    ("arch-linux", "Arch Linux-inspired", "SPECIAL", "Technical dark navy with Arch-blue highlights.", "#101820", "#192630", "#243541", "#141e27", "#2d414e", "#425d6c", "#1793d1", "#1176aa", "#0d5b85", "#eef7fc", "#b6c9d3", "#849aa6", "#ffffff"),
+    ("kali-linux", "Kali Linux-inspired", "SPECIAL", "Graphite and dark navy with cool blue accents.", "#11151b", "#1b222c", "#283341", "#151b23", "#303b48", "#465665", "#4da3ff", "#3181d3", "#2463a6", "#f1f5fa", "#b7c2cf", "#8793a1", "#ffffff"),
+    ("nvidia-green", "NVIDIA Green-inspired", "SPECIAL", "Black graphite with vivid green highlights.", "#0d0f0e", "#171a18", "#222724", "#121513", "#2b332e", "#414d46", "#76b900", "#5e9500", "#477100", "#f2f5f2", "#bac4bc", "#87938a", "#11180a"),
+]
+THEMES: dict[str, ThemeDefinition] = {
+    row[0]: ThemeDefinition(*row) for row in _THEME_ROWS
+}
+DEFAULT_THEME_ID = "minimal-simple"
+
+# Existing constant imports remain source-compatible. ThemeManager updates
+# these module attributes when switching; QSS is generated from the same tokens.
+BG_DEEP = "#111318"
+BG_PANEL = "#181b21"
+BG_PANEL_HI = "#20242c"
+BG_INPUT = "#15181e"
+BORDER = "#2b303a"
+BORDER_HI = "#3a414d"
+ACCENT = "#4f8cff"
+ACCENT_DIM = "#3975df"
+ACCENT_DEEP = "#285bb8"
+TEXT_PRIMARY = "#f5f7fa"
+TEXT_SECONDARY = "#b5bdc8"
+TEXT_MUTED = "#818a97"
+TEXT_ON_ACCENT = "#ffffff"
 DANGER = "#f87171"
 SUCCESS = "#4ade80"
 WARNING = "#fbbf24"
+_ACTIVE_THEME = THEMES[DEFAULT_THEME_ID]
+_REDUCE_EFFECTS = False
+
+
+def _activate_tokens(theme: ThemeDefinition) -> None:
+    global BG_DEEP, BG_PANEL, BG_PANEL_HI, BG_INPUT, BORDER, BORDER_HI
+    global ACCENT, ACCENT_DIM, ACCENT_DEEP, TEXT_PRIMARY, TEXT_SECONDARY
+    global TEXT_MUTED, TEXT_ON_ACCENT, DANGER, SUCCESS, WARNING, _ACTIVE_THEME
+    BG_DEEP, BG_PANEL, BG_PANEL_HI, BG_INPUT = theme.background, theme.panel, theme.panel_hover, theme.input
+    BORDER, BORDER_HI = theme.border, theme.border_hover
+    ACCENT, ACCENT_DIM, ACCENT_DEEP = theme.accent, theme.accent_dim, theme.accent_deep
+    TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED = theme.text, theme.text_secondary, theme.text_muted
+    TEXT_ON_ACCENT = theme.text_on_accent
+    DANGER, SUCCESS, WARNING = theme.danger, theme.success, theme.warning
+    _ACTIVE_THEME = theme
+
+
+class ThemeManager(QObject):
+    """Applies shared QSS themes and stores preferences in QSettings."""
+    theme_changed = Signal(str)
+    effects_changed = Signal(bool)
+    _instance = None
+
+    def __init__(self, app: QApplication | None = None):
+        super().__init__()
+        self.app = app or QApplication.instance()
+        self.settings = QSettings("AnimeVault", "AnimeVault")
+        self.theme_id = DEFAULT_THEME_ID
+
+    @classmethod
+    def instance(cls, app: QApplication | None = None) -> "ThemeManager":
+        if cls._instance is None:
+            cls._instance = cls(app)
+        elif app is not None:
+            cls._instance.app = app
+        return cls._instance
+
+    def restore(self) -> str:
+        saved = self.settings.value("appearance/theme_id", DEFAULT_THEME_ID, type=str)
+        return self.apply_theme(saved, persist=False)
+
+    def apply_theme(self, theme_id: str, *, persist: bool = True) -> str:
+        """Apply a registered theme; unknown IDs safely select Minimal Simple."""
+        theme = THEMES.get(theme_id, THEMES[DEFAULT_THEME_ID])
+        _activate_tokens(theme)
+        self.theme_id = theme.id
+        if self.app is None:
+            self.app = QApplication.instance()
+        if self.app is not None:
+            self.app.setStyleSheet(build_stylesheet())
+        if persist:
+            self.settings.setValue("appearance/theme_id", theme.id)
+            self.settings.sync()
+        self.theme_changed.emit(theme.id)
+        return theme.id
+
+    @property
+    def active_theme(self) -> ThemeDefinition:
+        return THEMES.get(self.theme_id, THEMES[DEFAULT_THEME_ID])
+
+    @property
+    def reduce_effects(self) -> bool:
+        return self.settings.value("appearance/reduce_effects", False, type=bool)
+
+    def set_reduce_effects(self, enabled: bool) -> None:
+        global _REDUCE_EFFECTS
+        _REDUCE_EFFECTS = bool(enabled)
+        self.settings.setValue("appearance/reduce_effects", _REDUCE_EFFECTS)
+        self.settings.sync()
+        if self.app is None:
+            self.app = QApplication.instance()
+        if self.app is not None:
+            self.app.setStyleSheet(build_stylesheet())
+        self.effects_changed.emit(_REDUCE_EFFECTS)
+
+
 
 # ── Tier badge colours (SSS gold → F grey) ───────────────────────
 
@@ -181,7 +306,7 @@ QPushButton#primaryButton {{
     padding: 9px 18px;
     font-weight: 700;
 }}
-QPushButton#primaryButton:hover {{ background: #3ddcf3; }}
+QPushButton#primaryButton:hover {{ background: {ACCENT_DIM}; }}
 QPushButton#primaryButton:pressed {{ background: {ACCENT_DIM}; }}
 
 /* ── Search ─────────────────────────────────────────────── */
@@ -235,7 +360,7 @@ QFrame#mediaCard {{
 }}
 QFrame#mediaCard:hover {{
     border: 1px solid {ACCENT_DIM};
-    background: {BG_PANEL_HI};
+    background: {BG_PANEL if _REDUCE_EFFECTS else BG_PANEL_HI};
 }}
 QFrame#mediaCard[selected="true"] {{
     border: 2px solid {ACCENT};
@@ -308,7 +433,7 @@ QScrollBar::handle:vertical {{
     border-radius: 5px;
     min-height: 30px;
 }}
-QScrollBar::handle:vertical:hover {{ background: #3d4a59; }}
+QScrollBar::handle:vertical:hover {{ background: {BORDER_HI}; }}
 QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; width: 0; }}
 QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; }}
 QScrollBar:horizontal {{

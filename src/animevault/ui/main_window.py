@@ -39,7 +39,7 @@ from animevault.ui.card_grid import CardGrid
 from animevault.ui.details_dialog import DetailsDialog
 from animevault.ui.add_media_dialog import AddMediaDialog
 from animevault.ui.overview_panel import OverviewPanel
-from animevault.ui.theme import TEXT_MUTED, TEXT_SECONDARY
+
 from animevault.ui.video_background import DEFAULT_OPACITY as BACKGROUND_OPACITY
 from animevault.ui.video_background import VideoBackground
 
@@ -81,6 +81,13 @@ class MainWindow(QMainWindow):
 
         self._build_ui()
         self._build_shortcuts()
+        from animevault.ui.theme import ThemeManager
+        manager = ThemeManager.instance()
+        manager.theme_changed.connect(self._on_theme_changed)
+        manager.effects_changed.connect(self._on_effects_changed)
+        self._background.set_effects_reduced(
+            manager.reduce_effects or manager.theme_id == "minimal-simple"
+        )
 
         self.library_changed.connect(self.refresh)
         self.refresh()
@@ -741,15 +748,37 @@ class MainWindow(QMainWindow):
             "Built with PySide6 and SQLite.",
         )
 
-    def _show_settings(self) -> None:
-        QMessageBox.information(
-            self,
-            "Settings",
-            "AnimeVault v0.3.0\n\n"
-            "• Provider metadata is fetched on demand.\n"
-            "• TMDB requires an API key and stays disabled without one.\n"
-            "• Local AI (Ollama) is optional and never overrides providers.",
+    def _on_theme_changed(self, theme_id: str) -> None:
+        """Refresh custom-painted cards while retaining the current selection."""
+        from animevault.ui.theme import ThemeManager
+
+        manager = ThemeManager.instance()
+        self._background.set_effects_reduced(
+            manager.reduce_effects or theme_id == "minimal-simple"
         )
+        selected_ids = {
+            card.item.id for card in self._grid.cards if card.is_selected()
+        }
+        self._overview.apply_theme()
+        self.refresh()
+        for card in self._grid.cards:
+            if card.item.id in selected_ids:
+                card.set_selected(True)
+        self._delete_button.setEnabled(bool(selected_ids))
+        self._background.update()
+
+    def _on_effects_changed(self, reduced: bool) -> None:
+        from animevault.ui.theme import ThemeManager
+
+        manager = ThemeManager.instance()
+        self._background.set_effects_reduced(
+            reduced or manager.theme_id == "minimal-simple"
+        )
+
+    def _show_settings(self) -> None:
+        from animevault.ui.theme_dialog import ThemeSettingsDialog
+
+        ThemeSettingsDialog(self).exec()
 
     def _quit(self) -> None:
         from PySide6.QtWidgets import QApplication

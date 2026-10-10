@@ -31,13 +31,8 @@ from animevault.media_types import (
 from animevault.models.anime import Anime
 from animevault.models.literature import Literature
 from animevault.tiers import TIERS
-from animevault.ui.theme import (
-    BORDER,
-    TEXT_MUTED,
-    TEXT_PRIMARY,
-    TEXT_SECONDARY,
-    tier_color,
-)
+from animevault.ui import theme as theme_tokens
+from animevault.ui.theme import tier_color
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +53,7 @@ def _panel(title: str) -> tuple[QFrame, QVBoxLayout]:
     frame = QFrame()
     frame.setObjectName("statPanel")
     frame.setStyleSheet(
-        f"#statPanel {{ background:{BG_PANEL_ALT}; border:1px solid {BORDER};"
+        f"#statPanel {{ background:{theme_tokens.BG_PANEL}; border:1px solid {theme_tokens.BORDER};"
         " border-radius:10px; }"
     )
     layout = QVBoxLayout(frame)
@@ -89,8 +84,6 @@ class _ElidingLabel(QLabel):
         )
 
 
-# Imported here to avoid a circular import at module load.
-from animevault.ui.theme import BG_PANEL as BG_PANEL_ALT  # noqa: E402
 
 
 class _StatRow(QWidget):
@@ -137,7 +130,7 @@ class _BarTrack(QFrame):
         super().__init__()
         self._fraction = max(0.0, min(1.0, fraction))
         self.setFixedHeight(7)
-        self.setStyleSheet("background:#0f141b; border-radius:3px;")
+        self.setStyleSheet(f"background:{theme_tokens.BG_INPUT}; border-radius:3px;")
 
         self._fill = QFrame(self)
         self._fill.setFixedHeight(7)
@@ -232,12 +225,21 @@ class OverviewPanel(QScrollArea):
         self._rows: dict[str, _StatRow] = {}
         self._build_static_panels()
 
+    def apply_theme(self) -> None:
+        """Refresh inline styles that Qt cannot replace from global QSS."""
+        for frame in self.findChildren(QFrame):
+            if frame.objectName() == "statPanel":
+                frame.setStyleSheet(
+                    f"#statPanel {{ background:{theme_tokens.BG_PANEL}; "
+                    f"border:1px solid {theme_tokens.BORDER}; border-radius:10px; }}"
+                )
+
     @staticmethod
     def _placeholder(text: str) -> QLabel:
         """A fresh empty-state label (created per refresh, never reused)."""
         label = QLabel(text)
         label.setObjectName("statLabel")
-        label.setStyleSheet(f"color:{TEXT_MUTED};")
+        label.setStyleSheet(f"color:{theme_tokens.TEXT_MUTED};")
         return label
 
     # ── Static structure ───────────────────────────────────────────
