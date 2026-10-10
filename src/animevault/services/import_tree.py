@@ -101,7 +101,9 @@ class FetchScheduler:
                         ):
                             node.retry_count += 1
                             node.state = NodeState.RETRY_WAIT
-                            delay = min(8.0, 0.5 * (2**attempt)) * random.uniform(0.8, 1.2)
+                            retry_after = getattr(exc, "retry_after", None)
+                            exponential = min(8.0, 0.5 * (2**attempt)) * random.uniform(0.8, 1.2)
+                            delay = max(float(retry_after or 0), exponential)
                             cancelled = cancel_event.wait(delay) if cancel_event else False
                             if not cancelled:
                                 node.state = NodeState.RUNNING

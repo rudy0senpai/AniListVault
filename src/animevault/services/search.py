@@ -10,6 +10,7 @@ from animevault.models.anime import Anime
 from animevault.services import cache
 from animevault.services.providers.anilist import AniListProvider
 from animevault.services.providers.base import AnimeMetadata, BaseProvider, ProviderError
+from animevault.services.diagnostics import sanitize_error
 from animevault.services.providers.jikan import JikanProvider
 from animevault.services.providers.kitsu import KitsuProvider
 from animevault.services.providers.tmdb import TmdbProvider
@@ -61,13 +62,14 @@ class SearchService:
         if providers is not None:
             self._providers = providers
         else:
-            # AniList is confirmed working primary, followed by Kitsu, Jikan, TMDB
+            # AniList primary, followed by Kitsu, Jikan and optional TMDB.
             self._providers = [
                 AniListProvider(),
                 KitsuProvider(),
                 JikanProvider(),
                 TmdbProvider(),
             ]
+        self.last_cache_hit = False
 
     @property
     def providers(self) -> list[BaseProvider]:
@@ -78,19 +80,21 @@ class SearchService:
     ) -> list[AnimeMetadata]:
         """Search across providers in priority order with caching and scoring."""
         q = query.strip()
+        self.last_cache_hit = False
         if not q:
             return []
 
         cache_key = f"search:multi:{q.casefold()}:{int(limit)}"
         cached = None if force_refresh else cache.get(cache_key, ttl=cache.TTL_METADATA)
         if cached is not None and isinstance(cached, list):
+            self.last_cache_hit = True
             logger.debug("Cache hit for search %r", q)
             # Reconstruct AnimeMetadata objects from cached dicts
             return [AnimeMetadata(**item) for item in cached]
 
         all_results: list[AnimeMetadata] = []
         seen_keys: set[str] = set()
-        last_retryable_error: ProviderError | None = None
+        last_provider_error: ProviderError | None = None
 
         for provider in self._providers:
             if not provider.is_available():
@@ -115,17 +119,18 @@ class SearchService:
                 if all_results and any(calculate_match_score(q, r) >= 90.0 for r in all_results):
                     break
             except ProviderError as exc:
-                logger.warning("Provider %s error searching %r: %s", provider.name, q, exc)
-                if exc.retryable:
-                    last_retryable_error = exc
+                exc.provider = exc.provider or provider.name
+                logger.warning("Provider %s error searching %r: %s", provider.name, q, sanitize_error(exc))
+                if exc.status_code != 404:
+                    last_provider_error = exc
                 continue
             except Exception as exc:
-                logger.warning("Unexpected error from %s: %s", provider.name, exc)
+                logger.warning("Unexpected error from %s: %s", provider.name, sanitize_error(exc))
                 continue
 
-        # A failed search must not be treated as a durable not-found response.
-        if not all_results and last_retryable_error is not None:
-            raise last_retryable_error
+        # Do not mislabel provider/auth/network failures as a title not-found.
+        if not all_results and last_provider_error is not None:
+            raise last_provider_error
 
         # Rank results by match score
         all_results.sort(key=lambda r: calculate_match_score(q, r), reverse=True)

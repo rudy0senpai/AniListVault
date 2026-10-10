@@ -11,6 +11,7 @@ import datetime
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from pathlib import Path
 from threading import Event, local
 from typing import Optional
@@ -21,6 +22,7 @@ from animevault.media_types import is_literature
 from animevault.models.anime import Anime
 from animevault.models.literature import Literature
 from animevault.database import get_connection
+from animevault.services.diagnostics import failure_record, sanitize_error
 from animevault.services.enrichment import merge_metadata_into_anime, pick_best_match
 from animevault.services.import_tree import EntryNode, FetchScheduler, ImportTree, NodeState
 from animevault.services.literature_search import calculate_literature_match_score
@@ -91,11 +93,18 @@ PROGRESS_INTERVAL_SECONDS = 0.35
 _thread_services = local()
 
 
+@dataclass(frozen=True)
+class _MetadataOutcome:
+    metadata: object
+    cache_hit: bool
+
+
 class BulkEnrichmentWorker(QThread):
     """Processes a mixed list of anime + literature in bounded chunks."""
 
     progress = Signal(int, int, str, dict)
     enrichment_finished = Signal(dict)
+    poster_ready = Signal(int, str)
 
     def __init__(
         self,
@@ -146,16 +155,21 @@ class BulkEnrichmentWorker(QThread):
 
     def run(self) -> None:
         stats = {
-            "processed": 0, "updated": 0, "cached": 0, "failed": 0,
+            "total": 0, "total_tasks": 0, "processed": 0, "updated": 0, "cached": 0,
+            "skipped_complete": 0, "failed": 0, "not_found": 0,
+            "permanently_unresolved": 0,
             "posters": 0, "metadata_completed": 0, "poster_completed": 0,
-            "poster_failed": 0,
+            "poster_failed": 0, "retry_attempts": 0, "failure_details": [],
+            "cancelled": 0,
         }
         node_items: dict[str, list] = {}
         for item in self._items:
             node = self._tree.add_item(item)
             node_items.setdefault(node.stable_id, []).append(item)
         entries = list(self._tree.iter_entries())
-        total = len(entries)
+        total = len(self._items)
+        stats["total"] = total
+        stats["unique_titles"] = len(entries)
         if total == 0:
             self.enrichment_finished.emit(stats)
             return
@@ -185,7 +199,7 @@ class BulkEnrichmentWorker(QThread):
                     resume_posters.append((node, item, poster_url))
                 else:
                     node.state = NodeState.COMPLETED
-                    stats["cached"] += len(related)
+                    stats["skipped_complete"] += len(related)
                     stats["processed"] += len(related)
                 continue
             if not self._refresh_all and all(
@@ -203,7 +217,7 @@ class BulkEnrichmentWorker(QThread):
                     resume_posters.append((node, item, poster_url))
                 else:
                     node.state = node.poster_state = NodeState.COMPLETED
-                stats["cached"] += len(related)
+                stats["skipped_complete"] += len(related)
                 stats["processed"] += len(related)
             else:
                 node.state = NodeState.RUNNING
@@ -241,7 +255,8 @@ class BulkEnrichmentWorker(QThread):
                     except Exception as exc:
                         if node:
                             node.persistence_state = node.state = NodeState.FAILED
-                            node.error = str(exc)
+                            node.error = sanitize_error(exc)
+                            self._record_failure(stats, item, node, exc, stage="persistence")
                         stats["failed"] += 1
 
         item_nodes = {id(item): node for node in entries for item in node_items.get(node.stable_id, [])}
@@ -265,10 +280,14 @@ class BulkEnrichmentWorker(QThread):
                         node.state = node.metadata_state = NodeState.CANCELLED
                         continue
                     related = node_items[node.stable_id]
+                    if isinstance(result, _MetadataOutcome):
+                        if result.cache_hit:
+                            stats["cached"] += len(related)
+                        result = result.metadata
                     if error is not None:
-                        self._mark_failed(node, error, stats)
+                        self._mark_failed(node, error, stats, related[0])
                     elif result is None:
-                        self._mark_failed(node, "No matching metadata found", stats)
+                        self._mark_not_found(node, stats, related[0])
                     else:
                         try:
                             self._validate_result(related[0], result)
@@ -296,9 +315,9 @@ class BulkEnrichmentWorker(QThread):
                             if not any(id(item) in {id(x) for x in dirty} for item in related):
                                 node.persistence_state = NodeState.COMPLETED
                                 node.state = NodeState.COMPLETED
-                            stats["updated"] += 1
+                            stats["updated"] += len(related)
                         except Exception as exc:
-                            self._mark_failed(node, exc, stats)
+                            self._mark_failed(node, exc, stats, related[0])
                     stats["processed"] += len(related)
                     persist_batch()
                     now = time.monotonic()
@@ -315,7 +334,7 @@ class BulkEnrichmentWorker(QThread):
                         local_path = future.result()
                     except Exception as exc:
                         local_path = None
-                        node.error = str(exc)
+                        node.error = sanitize_error(exc)
                     related = node_items[node.stable_id]
                     if local_path:
                         for item in related:
@@ -326,6 +345,9 @@ class BulkEnrichmentWorker(QThread):
                             item_nodes[id(item)] = node
                             dirty.append(item)
                             batch_nodes.add(item, node)
+                            item_id = getattr(item, "id", None)
+                            if item_id is not None:
+                                self.poster_ready.emit(int(item_id), str(local_path))
                         stats["posters"] += 1
                         node.poster_path = local_path
                     node.poster_state = NodeState.COMPLETED if local_path else NodeState.FAILED
@@ -335,20 +357,30 @@ class BulkEnrichmentWorker(QThread):
                         stats["poster_failed"] += 1
                         node.error = node.error or "Poster download failed or returned invalid image data"
                         node.state = NodeState.FAILED
+                        for item in related:
+                            self._record_failure(stats, item, node, node.error, stage="poster")
                     persist_batch()
                 persist_batch(force=True)
         except Exception as exc:
-            logger.exception("Bulk import scheduler failed")
-            stats["failed"] += max(0, total - stats["processed"])
+            safe_error = sanitize_error(exc)
+            logger.error("Bulk import scheduler failed: %s", safe_error)
             for node in self._tree.incomplete_nodes():
-                if node.state != NodeState.CANCELLED:
-                    node.state = NodeState.FAILED
-                    node.error = str(exc)
+                if node.state in (NodeState.PENDING, NodeState.RUNNING, NodeState.RETRY_WAIT):
+                    node.state = node.metadata_state = NodeState.FAILED
+                    node.error = safe_error
+                    related = node_items.get(node.stable_id, [])
+                    if related:
+                        self._mark_failed(node, exc, stats, related[0])
+                    else:
+                        stats["failed"] += 1
 
         if self._is_cancelled:
             for node in self._tree.incomplete_nodes():
                 if node.state in (NodeState.PENDING, NodeState.RUNNING):
                     node.state = NodeState.CANCELLED
+        stats["retry_attempts"] = sum(node.retry_count for node in entries)
+        stats["cancelled"] = sum(node.state == NodeState.CANCELLED for node in entries)
+        stats["total_tasks"] = len(entries) + len(poster_futures)
         self._save_checkpoint()
         self._emit_progress(stats, total, "Import complete" if not self._is_cancelled else "Import cancelled")
         self.enrichment_finished.emit(stats)
@@ -365,11 +397,41 @@ class BulkEnrichmentWorker(QThread):
         )
 
     @staticmethod
-    def _mark_failed(node: EntryNode, error, stats: dict) -> None:
-        node.retry_count += 1
-        node.error = str(error)
+    def _record_failure(stats: dict, item, node: EntryNode, error, *, stage="metadata") -> None:
+        stats["failure_details"].append(
+            failure_record(
+                item=item,
+                node=node,
+                error=error,
+                stage=stage,
+                provider=(
+                    getattr(error, "provider", "")
+                    or getattr(item, "source_provider", "")
+                    or "provider-chain"
+                ),
+            )
+        )
+
+    @classmethod
+    def _mark_failed(cls, node: EntryNode, error, stats: dict, item=None) -> None:
+        safe_error = sanitize_error(error)
+        node.error = safe_error
         node.state = node.metadata_state = NodeState.FAILED
         stats["failed"] += 1
+        if getattr(error, "retryable", True) is False and getattr(error, "status_code", None) != 404:
+            stats["permanently_unresolved"] += 1
+        if item is not None:
+            cls._record_failure(stats, item, node, error)
+
+    @classmethod
+    def _mark_not_found(cls, node: EntryNode, stats: dict, item=None) -> None:
+        message = "No matching metadata found"
+        node.error = message
+        node.state = node.metadata_state = NodeState.FAILED
+        stats["not_found"] += 1
+        if item is not None:
+            cls._record_failure(stats, item, node, message)
+
 
     @staticmethod
     def _fetch_metadata(node: EntryNode, item, force_refresh: bool = False):
@@ -383,18 +445,20 @@ class BulkEnrichmentWorker(QThread):
                 _thread_services.literature = service
             candidates = service.search(item.title, limit=5, force_refresh=force_refresh)
             if not candidates:
-                return None
-            return max(candidates, key=lambda meta: calculate_literature_match_score(item.title, meta))
+                return _MetadataOutcome(None, bool(service.last_cache_hit))
+            best = max(candidates, key=lambda meta: calculate_literature_match_score(item.title, meta))
+            return _MetadataOutcome(best, bool(service.last_cache_hit))
         service = getattr(_thread_services, "anime", None)
         if service is None:
             service = SearchService()
             _thread_services.anime = service
         candidates = service.search(item.title, limit=5, force_refresh=force_refresh)
-        return pick_best_match(
+        best = pick_best_match(
             item.title, candidates,
             anilist_id=getattr(item, "anilist_id", None),
             mal_id=getattr(item, "mal_id", None),
         )
+        return _MetadataOutcome(best, bool(service.last_cache_hit))
 
     @staticmethod
     def _validate_result(item, result) -> None:

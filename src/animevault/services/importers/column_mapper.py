@@ -24,6 +24,7 @@ FIELD_EPISODES = "episodes"
 FIELD_EPISODES_WATCHED = "episodes_watched"
 FIELD_STATUS = "status"
 FIELD_TIER = "tier"
+FIELD_SCORE = "score"
 FIELD_REWATCHES = "rewatches"
 FIELD_FAVORITE = "favorite"
 FIELD_NOTES = "notes"
@@ -88,6 +89,7 @@ PERSONAL_FIELDS = frozenset(
     {
         FIELD_STATUS,
         FIELD_TIER,
+        FIELD_SCORE,
         FIELD_REWATCHES,
         FIELD_FAVORITE,
         FIELD_NOTES,
@@ -132,6 +134,7 @@ _ALIASES: dict[str, tuple[str, ...]] = {
         "tier", "rank", "anime tier", "personal tier", "rating tier",
         "my tier", "tier rank", "grade",
     ),
+    FIELD_SCORE: ("personal rating", "legacy score", "my score", "anime score"),
     FIELD_REWATCHES: (
         "rewatches", "rewatch", "rewatch count", "times watched",
         "times rewatched", "watched again", "rewatch_count",
@@ -252,6 +255,9 @@ _TOKENS: dict[str, set[str]] = {}
 for _f, _names in _ALIASES.items():
     for _n in _names:
         for _tok in normalize_header(_n).split():
+            # A lone "score" token is too generic to classify custom score fields.
+            if _f == FIELD_SCORE and _tok == "score":
+                continue
             _TOKENS.setdefault(_tok, set()).add(_f)
 
 

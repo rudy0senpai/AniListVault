@@ -10,7 +10,7 @@ import urllib.parse
 import urllib.request
 from typing import Optional
 
-from .base import AnimeMetadata, BaseProvider, ProviderError
+from .base import AnimeMetadata, BaseProvider, ProviderError, parse_retry_after
 
 logger = logging.getLogger(__name__)
 
@@ -36,8 +36,14 @@ def _kitsu_get(url: str, timeout: int = 12) -> dict:
         if code == 404:
             raise ProviderError("Kitsu 404: not found", status_code=404, retryable=False)
         if code == 429:
-            retry_after = int(exc.headers.get("Retry-After", "60"))
-            raise ProviderError(f"Kitsu rate limited (429)", status_code=429, retryable=True)
+            retry_after = parse_retry_after(exc.headers.get("Retry-After"), 60.0)
+            raise ProviderError(
+                "Kitsu rate limited (429)",
+                status_code=429,
+                retryable=True,
+                retry_after=retry_after,
+                provider="kitsu",
+            )
         if code in (500, 502, 503, 504):
             raise ProviderError(f"Kitsu server error {code}", status_code=code, retryable=True)
         if code == 403:

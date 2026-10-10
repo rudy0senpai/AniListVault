@@ -12,7 +12,7 @@ from animevault.services.update import (
 )
 
 
-def release_payload(version="v0.4.0", url="https://github.com/rudy0senpai/AniListVault/releases/download/v0.4.0/AnimeVault-Setup.exe", digest=None):
+def release_payload(version="v0.4.0", url="https://github.com/sample-owner/sample-repo/releases/download/v0.4.0/AnimeVault-Setup.exe", digest=None):
     asset = {
         "name": "AnimeVault-Setup.exe",
         "browser_download_url": url,
@@ -23,7 +23,7 @@ def release_payload(version="v0.4.0", url="https://github.com/rudy0senpai/AniLis
         "tag_name": version,
         "name": "AnimeVault 0.4.0",
         "body": "Bug fixes and improvements",
-        "html_url": "https://github.com/rudy0senpai/AniListVault/releases/tag/v0.4.0",
+        "html_url": "https://github.com/sample-owner/sample-repo/releases/tag/v0.4.0",
         "draft": False,
         "prerelease": False,
         "assets": [asset],
@@ -97,14 +97,25 @@ def test_download_rejects_digest_mismatch_and_removes_partial_file(tmp_path, mon
     assert not (tmp_path / "AnimeVault-Setup.exe").exists()
 
 
-def test_no_published_release_is_a_normal_no_update_result(monkeypatch):
+def test_unavailable_release_endpoint_is_not_reported_as_up_to_date(monkeypatch):
     from urllib.error import HTTPError
 
     def missing(*_args, **_kwargs):
         raise HTTPError("url", 404, "Not Found", {}, None)
 
     monkeypatch.setattr("animevault.services.update.urlopen", missing)
-    assert check_for_updates("0.3.0") is None
+    with pytest.raises(UpdateError, match="returned 404"):
+        check_for_updates(
+            "0.3.1",
+            release_api="https://api.github.com/repos/sample-owner/sample-repo/releases/latest",
+        )
+
+
+def test_release_source_must_be_configured_and_official():
+    with pytest.raises(UpdateError, match="Enter an official HTTPS"):
+        check_for_updates("0.3.1")
+    with pytest.raises(UpdateError, match="Enter an official HTTPS"):
+        check_for_updates("0.3.1", release_api="https://example.com/latest")
 
 
 def test_launch_requires_digest_match(tmp_path, monkeypatch):

@@ -14,7 +14,7 @@ import urllib.parse
 import urllib.request
 from typing import Optional
 
-from .base import AnimeMetadata, BaseProvider, ProviderError
+from .base import AnimeMetadata, BaseProvider, ProviderError, parse_retry_after
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +47,13 @@ def _tmdb_get(path: str, params: dict, timeout: int = 12) -> dict:
         if code == 404:
             raise ProviderError("TMDB 404: not found", status_code=404, retryable=False)
         if code == 429:
-            raise ProviderError("TMDB rate limited (429)", status_code=429, retryable=True)
+            raise ProviderError(
+                "TMDB rate limited (429)",
+                status_code=429,
+                retryable=True,
+                retry_after=parse_retry_after(exc.headers.get("Retry-After"), 60.0),
+                provider="tmdb",
+            )
         if code in (500, 502, 503, 504):
             raise ProviderError(f"TMDB server error {code}", status_code=code, retryable=True)
         raise ProviderError(f"TMDB HTTP {code}", status_code=code, retryable=False)

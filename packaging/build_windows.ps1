@@ -27,28 +27,50 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
-Write-Host "==> Cleaning previous builds" -ForegroundColor Cyan
-Get-ChildItem -Path build, dist -ErrorAction SilentlyContinue |
-    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+$versionSource = Join-Path $root "src\animevault\_version.py"
+$versionText = Get-Content -LiteralPath $versionSource -Raw
+$versionMatch = [regex]::Match($versionText, '__version__\s*=\s*"([^"]+)"')
+if (-not $versionMatch.Success) {
+    throw "Could not read the canonical application version from $versionSource"
+}
+$version = $versionMatch.Groups[1].Value
+$releaseName = "release-v$version-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+$releaseDir = Join-Path $root "dist\$releaseName"
+$workDir = Join-Path $root "build\$releaseName"
+$appDir = Join-Path $releaseDir "AnimeVault"
+$exePath = Join-Path $appDir "AnimeVault.exe"
+$iconPath = Join-Path $root "src\animevault\resources\media\app.ico"
+$mediaPath = Join-Path $root "src\animevault\resources\media"
+$entryPoint = Join-Path $root "src\animevault\cli.py"
+New-Item -ItemType Directory -Path $releaseDir, $workDir -Force | Out-Null
+$env:ANIMEVAULT_VERSION = $version
+$buildPython = if ($env:ANIMEVAULT_PYTHON) { $env:ANIMEVAULT_PYTHON } else { "python" }
 
+Write-Host "==> Building AnimeVault v$version in isolated paths; existing build/dist files will be preserved" -ForegroundColor Cyan
 Write-Host "==> Freezing application with PyInstaller" -ForegroundColor Cyan
-python -m PyInstaller `
+& $buildPython -m PyInstaller `
     --noconfirm `
     --clean `
     --windowed `
     --name "AnimeVault" `
-    --icon "src\animevault\resources\media\app.ico" `
-    --add-data "src\animevault\resources\media;src\animevault\resources\media" `
+    --distpath $releaseDir `
+    --workpath $workDir `
+    --specpath (Join-Path $workDir "spec") `
+    --icon $iconPath `
+    --add-data "$mediaPath;src/animevault/resources/media" `
     --collect-all PySide6 `
     --hidden-import "PySide6.QtMultimedia" `
     --hidden-import "PySide6.QtMultimediaWidgets" `
-    "src\animevault\cli.py"
-
-if (-not (Test-Path "dist\AnimeVault\AnimeVault.exe")) {
-    throw "PyInstaller did not produce dist\AnimeVault\AnimeVault.exe"
+    $entryPoint
+if ($LASTEXITCODE -ne 0) {
+    throw "PyInstaller failed with exit code $LASTEXITCODE"
 }
 
-Write-Host "==> Built: dist\AnimeVault\AnimeVault.exe" -ForegroundColor Green
+if (-not (Test-Path $exePath)) {
+    throw "PyInstaller did not produce $exePath"
+}
+
+Write-Host "==> Built: $exePath" -ForegroundColor Green
 
 if ($SkipInstaller) {
     Write-Host "==> Skipping installer (Inno Setup not run)" -ForegroundColor Yellow
@@ -58,6 +80,7 @@ if ($SkipInstaller) {
 $iscc = @(
     "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
     "$env:ProgramFiles\Inno Setup 6\ISCC.exe",
+    "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe",
     "iscc"
 ) | Where-Object { $_ -and (Get-Command $_ -ErrorAction SilentlyContinue) } | Select-Object -First 1
 
@@ -68,10 +91,16 @@ if (-not $iscc) {
 }
 
 Write-Host "==> Building installer with Inno Setup" -ForegroundColor Cyan
-& $iscc "packaging\AnimeVault.iss"
+$sourceMacro = $appDir
+$outputMacro = $releaseDir
+& $iscc "/Qp" "/DSourceDir=$sourceMacro" "/DOutputDir=$outputMacro" "packaging\AnimeVault.iss"
+if ($LASTEXITCODE -ne 0) {
+    throw "Inno Setup failed with exit code $LASTEXITCODE"
+}
 
-if (Test-Path "dist\AnimeVault-Setup.exe") {
-    Write-Host "==> Built: dist\AnimeVault-Setup.exe" -ForegroundColor Green
+$setupPath = Join-Path $releaseDir "AnimeVault-Setup.exe"
+if (Test-Path $setupPath) {
+    Write-Host "==> Built: $setupPath" -ForegroundColor Green
 } else {
-    throw "Inno Setup did not produce dist\AnimeVault-Setup.exe"
+    throw "Inno Setup did not produce $setupPath"
 }

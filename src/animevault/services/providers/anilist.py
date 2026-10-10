@@ -10,7 +10,7 @@ import urllib.error
 import urllib.request
 from typing import Optional
 
-from .base import AnimeMetadata, BaseProvider, ProviderError
+from .base import AnimeMetadata, BaseProvider, ProviderError, parse_retry_after
 
 logger = logging.getLogger(__name__)
 
@@ -165,12 +165,14 @@ class AniListProvider(BaseProvider):
                 logger.warning("AniList returned 403 — backing off 5 minutes")
                 raise ProviderError("AniList 403 Forbidden", status_code=403, retryable=False)
             if code == 429:
-                retry_after = int(exc.headers.get("Retry-After", "60"))
-                self._backoff_until = time.monotonic() + float(retry_after)
+                retry_after = parse_retry_after(exc.headers.get("Retry-After"), 60.0)
+                self._backoff_until = time.monotonic() + retry_after
                 raise ProviderError(
-                    f"AniList rate limited (429) — retry after {retry_after}s",
+                    "AniList rate limited (429)",
                     status_code=429,
                     retryable=True,
+                    retry_after=retry_after,
+                    provider="anilist",
                 )
             if code in (500, 502, 503, 504):
                 raise ProviderError(f"AniList server error {code}", status_code=code, retryable=True)

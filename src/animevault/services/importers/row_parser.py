@@ -42,6 +42,7 @@ from animevault.services.importers.column_mapper import (
     FIELD_SEASON,
     FIELD_SEASON_YEAR,
     FIELD_SERIALIZATION,
+    FIELD_SCORE,
     FIELD_STARTED_AT,
     FIELD_STATUS,
     FIELD_STUDIOS,
@@ -129,6 +130,7 @@ class AnimeDraft:
     episodes_watched: int = 0
     status: str = "plan_to_watch"
     tier: Optional[str] = None
+    score: Optional[float] = None
     rewatches: int = 0
     favorite: bool = False
     notes: str = ""
@@ -208,6 +210,16 @@ def _to_int(value: Any, default: int = 0) -> int:
         return int(digits)
     except ValueError:
         return default
+
+
+def _to_optional_float(value: Any) -> Optional[float]:
+    if value is None or value == "":
+        return None
+    try:
+        parsed = float(str(value).strip().replace(",", ""))
+    except (TypeError, ValueError):
+        return None
+    return parsed if 0.0 <= parsed <= 10.0 else None
 
 
 def _to_optional_int(value: Any) -> Optional[int]:
@@ -346,6 +358,7 @@ def parse_rows(
         draft.title_en = _to_text(cell(FIELD_TITLE_EN))
         draft.episodes = _to_int(cell(FIELD_EPISODES))
         draft.episodes_watched = _to_int(cell(FIELD_EPISODES_WATCHED))
+        draft.score = _to_optional_float(cell(FIELD_SCORE))
         draft.rewatches = _to_int(cell(FIELD_REWATCHES))
         draft.favorite = _to_bool(cell(FIELD_FAVORITE))
         draft.notes = _to_text(cell(FIELD_NOTES))

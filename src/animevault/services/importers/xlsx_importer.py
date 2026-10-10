@@ -119,6 +119,7 @@ def _apply_personal(
 
     _set("status", draft.status, _empty_str)
     _set("tier", draft.tier, _empty_opt)
+    _set("score", draft.score, _empty_opt)
     _set("rewatches", draft.rewatches, _empty_num)
     _set("episodes_watched", draft.episodes_watched, _empty_num)
     _set("favorite", draft.favorite, _empty_bool)
@@ -332,6 +333,7 @@ def _import_one(
             episodes=draft.episodes,
             status=draft.status,
             tier=draft.tier,
+            score=draft.score,
             rewatches=draft.rewatches,
             episodes_watched=draft.episodes_watched,
             favorite=draft.favorite,

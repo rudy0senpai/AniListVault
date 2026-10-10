@@ -8,6 +8,7 @@ written here is readable by our own importer and by Excel.
 from __future__ import annotations
 
 import zipfile
+import datetime as dt
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -45,6 +46,12 @@ def _clean(value: Any) -> str:
 def _cell_xml(ref: str, value: Any, shared: dict[str, int]) -> str:
     if value is None or value == "":
         return ""
+    if isinstance(value, dt.datetime):
+        serial = (value - dt.datetime(1899, 12, 30)).total_seconds() / 86400
+        return f'<c r="{ref}" s="3"><v>{serial:.12g}</v></c>'
+    if isinstance(value, dt.date):
+        serial = (value - dt.date(1899, 12, 30)).days
+        return f'<c r="{ref}" s="2"><v>{serial}</v></c>'
     if isinstance(value, bool):
         return f'<c r="{ref}" t="b"><v>{1 if value else 0}</v></c>'
     if isinstance(value, (int, float)):
@@ -67,6 +74,8 @@ def write_sheet(
 
     headers = list(headers)
     rows = [list(r) for r in rows]
+    if any(len(row) != len(headers) for row in rows):
+        raise ValueError("XLSX row width does not match header width")
 
     # Shared-string table: every text cell, de-duplicated in first-seen order.
     seen: list[str] = []
@@ -92,6 +101,13 @@ def write_sheet(
     for i, row in enumerate(rows, start=2):
         sheet_rows.append(build_row(row, i))
 
+    widths = [min(36, max(12, len(str(header)) + 2)) for header in headers]
+    cols_xml = "<cols>" + "".join(
+        f'<col min="{index}" max="{index}" width="{width}" customWidth="1"/>'
+        for index, width in enumerate(widths, start=1)
+    ) + "</cols>"
+    last_column = col_letter(len(headers) - 1) if headers else "A"
+    last_row = len(rows) + 1
     sheet_xml = (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         f'<worksheet xmlns="{NS_MAIN}">'
@@ -99,7 +115,8 @@ def write_sheet(
         '<sheetViews><sheetView workbookViewId="0">'
         '<pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>'
         "</sheetView></sheetViews>"
-        f'<sheetData>{"".join(sheet_rows)}</sheetData>'
+        f"{cols_xml}<sheetData>{''.join(sheet_rows)}</sheetData>"
+        f'<autoFilter ref="A1:{last_column}{last_row}"/>'
         "</worksheet>"
     )
 
@@ -120,11 +137,14 @@ def write_sheet(
 
     # Excel treats styles.xml as invalid without the fonts/fills/borders
     # sections and offers to "repair" the workbook, discarding cell text.
-    # Index 0 is the default style; index 1 is a bold header.
+    # Index 0 is default; 1 is the bold header; 2/3 are date and datetime.
     styles_xml = (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         f'<styleSheet xmlns="{NS_MAIN}">'
-        '<numFmts count="0"/>'
+        '<numFmts count="2">'
+        '<numFmt numFmtId="164" formatCode="yyyy-mm-dd"/>'
+        '<numFmt numFmtId="165" formatCode="yyyy-mm-dd hh:mm:ss"/>'
+        '</numFmts>'
         '<fonts count="2">'
         '<font><sz val="11"/><color theme="1"/><name val="Calibri"/>'
         '<family val="2"/></font>'
@@ -141,9 +161,11 @@ def write_sheet(
         '<cellStyleXfs count="1">'
         '<xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>'
         "</cellStyleXfs>"
-        '<cellXfs count="2">'
+        '<cellXfs count="4">'
         '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'
         '<xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/>'
+        '<xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>'
+        '<xf numFmtId="165" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>'
         "</cellXfs>"
         '<cellStyles count="1">'
         '<cellStyle name="Normal" xfId="0" builtinId="0"/>'

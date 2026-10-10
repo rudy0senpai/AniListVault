@@ -32,6 +32,15 @@ class TestCsvReader:
         path.write_text("Title\tTier\nX\tA\n", encoding="utf-8")
         assert read_csv(path)[1] == ["X", "A"]
 
+    def test_preserves_quoted_multiline_cell(self, tmp_path):
+        from animevault.services.importers.csv_importer import read_csv
+
+        path = tmp_path / "multiline.csv"
+        path.write_text('Title,Notes\n"line one\nline two","note, with comma"\n', encoding="utf-8")
+        rows = read_csv(path)
+        assert rows[1][0].replace("\r\n", "\n") == "line one\nline two"
+        assert rows[1][1] == "note, with comma"
+
     def test_missing_file_raises(self, tmp_path):
         from animevault.services.importers.csv_importer import CsvError, read_csv
 
@@ -114,6 +123,131 @@ class TestExport:
             chapters_read=145, tier="S", genres=["Action"], anilist_id=105398,
         )
         return True
+
+    def test_export_contains_all_currently_stored_roundtrip_fields(self, migrated_database, tmp_path):
+        import csv
+
+        from animevault.models.anime import Anime
+        from animevault.models.literature import Literature
+        from animevault.services.importers.exporter import COLUMNS, export_library
+
+        anime = Anime.create(
+            title='标题, "quoted"\nand continued', title_ja="字幕", episodes=12,
+            episodes_watched=0, score=8.5, favorite=True, poster_url="https://example.test/a.jpg",
+            airing_status="FINISHED", anidb_id=456, metadata_fetched_at="2026-01-02T03:04:05Z",
+        )
+        book = Literature.create(
+            title="本", category="manhua", chapters=0, chapters_read=0,
+            volumes=4, volumes_read=2, serialization="Magazine", pub_status="RELEASING",
+            cover_url="https://example.test/book.jpg", metadata_fetched_at="2026-01-03T00:00:00Z",
+        )
+        path = export_library(tmp_path / "complete.csv").path
+        with path.open(encoding="utf-8-sig", newline="") as handle:
+            reader = csv.DictReader(handle)
+            rows = list(reader)
+        assert len(reader.fieldnames) == len(COLUMNS)
+        anime_row = next(row for row in rows if row["Title"].startswith("标题"))
+        book_row = next(row for row in rows if row["Title"] == "本")
+        assert anime_row["Internal ID"] == str(anime.id)
+        assert anime_row["Legacy Score"] == "8.5"
+        assert anime_row["Airing Status"] == "FINISHED"
+        assert anime_row["Poster URL"] == "https://example.test/a.jpg"
+        assert anime_row["Favorite"] in {"True", "False"}
+        assert anime_row["Title"] == '标题, "quoted"\nand continued'
+        assert book_row["Volumes Read"] == "2"
+        assert book_row["Serialization"] == "Magazine"
+        assert book_row["Publication Status"] == "RELEASING"
+        assert book_row["Poster URL"] == "https://example.test/book.jpg"
+        from animevault.services.importers.csv_importer import preview_csv
+        preview = preview_csv(path)
+        assert preview.ok and preview.valid_rows == 2
+        round_trip = next(draft for draft in preview.parsed.drafts if draft.title.startswith("标题"))
+        assert round_trip.episodes_watched == 0
+        assert round_trip.favorite is True
+        assert round_trip.score == 8.5
+
+    def test_ods_export_has_header_and_typed_cells(self, migrated_database, tmp_path):
+        import zipfile
+        from xml.etree import ElementTree as ET
+
+        from animevault.models.anime import Anime
+        from animevault.services.importers.exporter import export_library
+
+        Anime.create(title="日本語", episodes=0, episodes_watched=0, favorite=True)
+        path = export_library(tmp_path / "out.ods", fmt="ods").path
+        with zipfile.ZipFile(path) as archive:
+            assert archive.namelist()[0] == "mimetype"
+            root = ET.fromstring(archive.read("content.xml"))
+        ns = {"table": "urn:oasis:names:tc:opendocument:xmlns:table:1.0",
+              "text": "urn:oasis:names:tc:opendocument:xmlns:text:1.0"}
+        rows = root.findall(".//table:table-row", ns)
+        assert rows[0].find("table:table-cell", ns).find("text:p", ns).text == "Media Type"
+        assert any(cell.find("text:p", ns) is not None and cell.find("text:p", ns).text == "日本語"
+                   for cell in rows[1].findall("table:table-cell", ns))
+        assert path.stat().st_size > 0
+
+    def test_xlsx_headers_filter_and_typed_values(self, migrated_database, tmp_path):
+        import zipfile
+        from xml.etree import ElementTree as ET
+
+        from animevault.models.anime import Anime
+        from animevault.services.importers.exporter import export_library
+
+        Anime.create(
+            title="日本語\nTitle", episodes=12, episodes_watched=0, favorite=True,
+            first_watched="2025-01-02", score=7.5,
+        )
+        path = export_library(tmp_path / "typed.xlsx", fmt="xlsx").path
+        ns = {"x": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+        with zipfile.ZipFile(path) as archive:
+            workbook = ET.fromstring(archive.read("xl/workbook.xml"))
+            sheet = workbook.find(".//x:sheet", ns)
+            assert sheet.get("name") == "AniListVault Library"
+            xml = ET.fromstring(archive.read("xl/worksheets/sheet1.xml"))
+            strings_root = ET.fromstring(archive.read("xl/sharedStrings.xml"))
+            shared = ["".join(t.text or "" for t in si.findall(".//x:t", ns))
+                      for si in strings_root.findall("x:si", ns)]
+        assert xml.find("x:autoFilter", ns) is not None
+        assert xml.find(".//x:pane", ns).get("state") == "frozen"
+        cells = {cell.get("r"): cell for cell in xml.findall(".//x:c", ns)}
+        assert shared[int(cells["A1"].find("x:v", ns).text)] == "Media Type"
+        assert cells["Q2"].get("t") == "b"  # favorite
+        assert cells["G2"].find("x:v", ns).text == "12"  # episodes numeric
+        assert cells["U2"].get("s") == "2"  # native date cell
+
+    def test_empty_library_exports_valid_tabular_files(self, migrated_database, tmp_path):
+        import csv
+        import zipfile
+        from xml.etree import ElementTree as ET
+
+        from animevault.services.importers.exporter import COLUMNS, export_library
+
+        csv_path = export_library(tmp_path / "empty.csv", fmt="csv").path
+        with csv_path.open(encoding="utf-8-sig", newline="") as handle:
+            reader = csv.reader(handle)
+            header = next(reader)
+            assert len(header) == len(COLUMNS)
+            assert list(reader) == []
+        xlsx_path = export_library(tmp_path / "empty.xlsx", fmt="xlsx").path
+        with zipfile.ZipFile(xlsx_path) as archive:
+            ET.fromstring(archive.read("xl/worksheets/sheet1.xml"))
+        ods_path = export_library(tmp_path / "empty.ods", fmt="ods").path
+        with zipfile.ZipFile(ods_path) as archive:
+            ET.fromstring(archive.read("content.xml"))
+
+    def test_all_four_media_types_share_canonical_row_schema(self, migrated_database):
+        from animevault.models.anime import Anime
+        from animevault.models.literature import Literature
+        from animevault.services.importers.exporter import COLUMNS, collect_rows
+
+        Anime.create(title="Anime")
+        for category in ("manga", "manhwa", "manhua"):
+            Literature.create(title=category.title(), category=category)
+        rows = collect_rows()
+        assert {row["media_type"] for row in rows} == {"anime", "manga", "manhwa", "manhua"}
+        assert all(set(row) == set(COLUMNS) for row in rows)
+        assert next(row for row in rows if row["media_type"] == "anime")["chapters"] == ""
+        assert next(row for row in rows if row["media_type"] == "manga")["episodes"] == ""
 
     def test_collects_both_categories(self, library):
         from animevault.services.importers.exporter import collect_rows

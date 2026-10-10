@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import io
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -55,7 +56,7 @@ def read_csv(path: str | Path) -> list[list[str]]:
         return []
 
     delimiter = _sniff_dialect(text[:8192])
-    reader = csv.reader(text.splitlines(), delimiter=delimiter)
+    reader = csv.reader(io.StringIO(text, newline=""), delimiter=delimiter)
     return [list(row) for row in reader]
 
 

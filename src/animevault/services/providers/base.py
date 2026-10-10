@@ -4,7 +4,23 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Optional
+
+
+def parse_retry_after(value, default: float = 60.0) -> float:
+    """Parse Retry-After seconds or HTTP date into a non-negative delay."""
+    try:
+        return max(0.0, float(value))
+    except (TypeError, ValueError):
+        try:
+            target = parsedate_to_datetime(str(value))
+            if target.tzinfo is None:
+                target = target.replace(tzinfo=timezone.utc)
+            return max(0.0, (target - datetime.now(timezone.utc)).total_seconds())
+        except (TypeError, ValueError, OverflowError):
+            return max(0.0, float(default))
 
 
 class ProviderError(Exception):
@@ -15,10 +31,15 @@ class ProviderError(Exception):
         message: str,
         status_code: Optional[int] = None,
         retryable: bool = True,
+        *,
+        retry_after: Optional[float] = None,
+        provider: str = "",
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.retryable = retryable
+        self.retry_after = retry_after
+        self.provider = provider
 
 
 @dataclass

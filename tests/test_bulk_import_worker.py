@@ -44,7 +44,7 @@ def test_bulk_worker_resumes_completed_entries_without_repeated_lookup(
     worker.enrichment_finished.connect(outcomes.append)
     worker.run()
 
-    assert outcomes[0]["cached"] == 1
+    assert outcomes[0]["skipped_complete"] == 1
     assert next(worker._tree.iter_entries()).state.value == "completed"
 
 

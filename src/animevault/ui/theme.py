@@ -34,10 +34,26 @@ class ThemeDefinition:
     success: str = "#4ade80"
     warning: str = "#fbbf24"
 
+    @property
+    def is_valid(self) -> bool:
+        import re
+
+        colors = (
+            self.background, self.panel, self.panel_hover, self.input,
+            self.border, self.border_hover, self.accent, self.accent_dim,
+            self.accent_deep, self.text, self.text_secondary, self.text_muted,
+            self.text_on_accent, self.danger, self.success, self.warning,
+        )
+        return bool(
+            self.id and self.name and self.description
+            and self.category in {"CORE", "ANIME", "GLASS", "SPECIAL"}
+            and all(re.fullmatch(r"#[0-9a-fA-F]{6}", color or "") for color in colors)
+        )
+
 
 # Stable IDs are suitable for QSettings and future user-defined theme files.
 _THEME_ROWS = [
-    ("minimal-simple", "Minimal Simple", "CORE", "Clean, restrained dark surfaces.", "#111318", "#181b21", "#20242c", "#15181e", "#2b303a", "#3a414d", "#4f8cff", "#3975df", "#285bb8", "#f5f7fa", "#b5bdc8", "#818a97", "#ffffff"),
+    ("minimal-simple", "Minimal Dark", "CORE", "The restrained original dark palette (default).", "#111318", "#181b21", "#20242c", "#15181e", "#2b303a", "#3a414d", "#4f8cff", "#3975df", "#285bb8", "#f5f7fa", "#b5bdc8", "#818a97", "#ffffff"),
     ("minimal-light", "Minimal Light", "CORE", "Bright neutral surfaces and clear blue accents.", "#f5f6f8", "#ffffff", "#edf0f4", "#f8f9fb", "#d9dee7", "#b8c1cf", "#2878e5", "#1e63c2", "#174e9b", "#202632", "#505b6b", "#707b8a", "#ffffff"),
     ("amoled-dark", "AMOLED Dark", "CORE", "Near-black OLED-friendly surfaces.", "#000000", "#08090b", "#121417", "#070809", "#202329", "#333841", "#5b91ff", "#3f70d4", "#2c55a9", "#f5f7fa", "#adb4bf", "#727a86", "#ffffff"),
     ("anime-night", "Anime Night", "ANIME", "Midnight navy with cool blue highlights.", "#101326", "#191d36", "#24294a", "#14182d", "#303657", "#444d78", "#7c83ff", "#5d63d8", "#454bb3", "#f2f2ff", "#b4b8d6", "#858bad", "#ffffff"),
@@ -55,6 +71,14 @@ _THEME_ROWS = [
     ("arch-linux", "Arch Linux-inspired", "SPECIAL", "Technical dark navy with Arch-blue highlights.", "#101820", "#192630", "#243541", "#141e27", "#2d414e", "#425d6c", "#1793d1", "#1176aa", "#0d5b85", "#eef7fc", "#b6c9d3", "#849aa6", "#ffffff"),
     ("kali-linux", "Kali Linux-inspired", "SPECIAL", "Graphite and dark navy with cool blue accents.", "#11151b", "#1b222c", "#283341", "#151b23", "#303b48", "#465665", "#4da3ff", "#3181d3", "#2463a6", "#f1f5fa", "#b7c2cf", "#8793a1", "#ffffff"),
     ("nvidia-green", "NVIDIA Green-inspired", "SPECIAL", "Black graphite with vivid green highlights.", "#0d0f0e", "#171a18", "#222724", "#121513", "#2b332e", "#414d46", "#76b900", "#5e9500", "#477100", "#f2f5f2", "#bac4bc", "#87938a", "#11180a"),
+
+    ("midnight-blue", "Midnight Blue", "CORE", "Deep blue-black surfaces with clear blue accents.", "#0b1220", "#111c2e", "#1b2a41", "#0e1728", "#263852", "#38516f", "#69a7ff", "#4d89df", "#3569b7", "#edf4ff", "#b4c4da", "#8295ae", "#ffffff"),
+    ("amoled-black", "AMOLED Black", "CORE", "True black surfaces for OLED displays.", "#000000", "#080808", "#141414", "#060606", "#242424", "#393939", "#66a3ff", "#4485e5", "#2e65b8", "#f5f5f5", "#b8b8b8", "#858585", "#ffffff"),
+    ("light", "Light", "CORE", "Bright neutral surfaces with accessible blue accents.", "#f5f6f8", "#ffffff", "#edf0f4", "#f8f9fb", "#d9dee7", "#b8c1cf", "#2878e5", "#1e63c2", "#174e9b", "#202632", "#505b6b", "#707b8a", "#ffffff"),
+    ("dracula", "Dracula", "CORE", "Dark violet surfaces with Dracula-inspired highlights.", "#282a36", "#343746", "#414458", "#2e3040", "#4a4d62", "#5b5f78", "#bd93f9", "#a879e8", "#875acb", "#f8f8f2", "#c7c6d0", "#9b9aa8", "#211b2c"),
+    ("nord", "Nord", "CORE", "Cool arctic blues and muted slate surfaces.", "#2e3440", "#3b4252", "#434c5e", "#343b49", "#4c566a", "#5c6880", "#88c0d0", "#6eabbc", "#558a9b", "#eceff4", "#c5cbd5", "#969eac", "#202a35"),
+    ("anime-neon", "Anime Neon", "ANIME", "Anime-inspired dark UI with restrained neon accents.", "#10101c", "#19192b", "#26263d", "#141422", "#35354f", "#4b4b70", "#ff4fd8", "#d638b4", "#aa238e", "#faf6ff", "#c8bfd8", "#958aa8", "#ffffff"),
+    ("sakura", "Sakura", "ANIME", "Soft sakura pink on calm midnight-blue surfaces.", "#101827", "#192438", "#24324a", "#141f30", "#2d3b52", "#40536f", "#f09ac8", "#d273a7", "#ad5489", "#f5f6ff", "#c0c8dd", "#909bb5", "#271824"),
 ]
 THEMES: dict[str, ThemeDefinition] = {
     row[0]: ThemeDefinition(*row) for row in _THEME_ROWS
@@ -122,7 +146,9 @@ class ThemeManager(QObject):
 
     def apply_theme(self, theme_id: str, *, persist: bool = True) -> str:
         """Apply a registered theme; unknown IDs safely select Minimal Simple."""
-        theme = THEMES.get(theme_id, THEMES[DEFAULT_THEME_ID])
+        theme = THEMES.get(theme_id)
+        if theme is None or not theme.is_valid:
+            theme = THEMES[DEFAULT_THEME_ID]
         _activate_tokens(theme)
         self.theme_id = theme.id
         if self.app is None:

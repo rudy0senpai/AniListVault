@@ -54,9 +54,17 @@ The primary workflow needs just a title; metadata is fetched and merged automati
 
 **Import / Export**
 - Import **XLSX**, **CSV** and **SQL** dumps, with intelligent header recognition (`Anime Name`, `Watch Status`, `Episodes Seen`, `Rating Tier`, … all map correctly) and an explicit preview of mapped *and* unmapped columns
-- Export the whole library to any of the three formats
+- Export the whole library to **CSV**, **XLSX**, **ODS**, or an application-compatible **SQL** dump. CSV/XLSX/ODS share a stable labeled column schema; spreadsheet exports include typed progress, Boolean, and date cells where supported. SQL preserves the app schema and its stored user/metadata fields; use **Back Up Database** for a byte-for-byte SQLite backup.
+- CSV uses UTF-8 with BOM and proper quoting; XLSX has a frozen/filterable header row; ODS contains typed cells. Tabular exports include applicable identification, provider metadata, progress, personal fields, and poster paths/URLs.
 - SQL imports are parsed and restored into a throwaway database first — never executed against the live one
 - Existing personal data is never silently overwritten; the default merge policy is *only fill empty fields*
+
+**Appearance and updates**
+- The default Minimal Dark theme plus Midnight Blue, AMOLED Black, Light, Dracula, Nord, Anime Neon and Sakura; the selection is applied live and persisted in QSettings.
+- Hide/Show Overview preserves the current library view and persists across restarts.
+- Settings includes a non-silent update check. It only checks a configured public GitHub Releases API endpoint; enter the official `https://api.github.com/repos/OWNER/REPO/releases/latest` URL for the actual public repository.
+- No trustworthy release source was verified in the repository at this time, so no owner/repository is prefilled. A 404, invalid endpoint or network failure is reported as an error, not as “up to date.” Installers are downloaded only after confirmation and are SHA-256 verified before launch.
+- Enrichment reports metadata failures, legitimate no-match results and poster failures separately; it supports bounded retries, Retry-After, retrying failed library items, and exporting a sanitized JSON/CSV failure report.
 
 ## Requirements
 

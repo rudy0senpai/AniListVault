@@ -5,7 +5,7 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import Qt, QThread, Signal, QSettings
 from PySide6.QtGui import QColor, QPixmap, QIcon
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -27,6 +27,7 @@ from animevault.services.update import (
     check_for_updates,
     download_installer,
     launch_installer,
+    validate_release_api_url,
 )
 from animevault.ui.theme import THEMES, ThemeManager
 
@@ -36,15 +37,16 @@ class _UpdateWorker(QThread):
 
     result = Signal(object, object)
 
-    def __init__(self, mode: str, info: UpdateInfo | None = None, parent=None):
+    def __init__(self, mode: str, info: UpdateInfo | None = None, release_api: str = "", parent=None):
         super().__init__(parent)
         self.mode = mode
         self.info = info
+        self.release_api = release_api
 
     def run(self) -> None:
         try:
             if self.mode == "check":
-                output = check_for_updates(__version__)
+                output = check_for_updates(__version__, release_api=self.release_api)
             else:
                 if self.info is None:
                     raise RuntimeError("No release is selected for download.")
@@ -62,6 +64,7 @@ class ThemeSettingsDialog(QDialog):
     def __init__(self, parent=None, manager: ThemeManager | None = None):
         super().__init__(parent)
         self.manager = manager or ThemeManager.instance()
+        self._settings = QSettings("AnimeVault", "AnimeVault")
         self.setWindowTitle("Appearance — Theme")
         self.resize(560, 620)
 
@@ -81,7 +84,7 @@ class ThemeSettingsDialog(QDialog):
             group.setFlags(Qt.ItemFlag.NoItemFlags)
             self._groups[category] = group
             self.list.addItem(group)
-            for theme in (t for t in THEMES.values() if t.category == category):
+            for theme in (t for t in THEMES.values() if t.category == category and t.is_valid):
                 pixmap = QPixmap(34, 24)
                 pixmap.fill(QColor(theme.background))
                 item = QListWidgetItem(QIcon(pixmap), theme.name)
@@ -97,16 +100,38 @@ class ThemeSettingsDialog(QDialog):
         self.reduce_effects = QCheckBox("Reduce Transparency & Effects")
         self.reduce_effects.setChecked(self.manager.reduce_effects)
         layout.addWidget(self.reduce_effects)
+        self.reset_theme_button = QPushButton("Reset to Default")
+        self.reset_theme_button.clicked.connect(lambda: self.manager.apply_theme("minimal-simple"))
+        layout.addWidget(self.reset_theme_button)
 
         update_group = QGroupBox("Software Updates")
-        update_layout = QHBoxLayout(update_group)
+        update_layout = QVBoxLayout(update_group)
+        header = QHBoxLayout()
         self.update_status = QLabel(f"Installed version: {__version__}")
         self.update_status.setWordWrap(True)
-        update_layout.addWidget(self.update_status, 1)
+        header.addWidget(self.update_status, 1)
         self.check_updates_button = QPushButton("Check for updates")
         self.check_updates_button.clicked.connect(self._check_for_updates)
-        update_layout.addWidget(self.check_updates_button)
+        header.addWidget(self.check_updates_button)
+        update_layout.addLayout(header)
+
+        source_row = QHBoxLayout()
+        source_row.addWidget(QLabel("GitHub release API:"))
+        self.release_api_input = QLineEdit(str(self._settings.value("updates/release_api", "")))
+        self.release_api_input.setPlaceholderText(
+            "https://api.github.com/repos/OWNER/REPO/releases/latest"
+        )
+        self.release_api_input.setClearButtonEnabled(True)
+        source_row.addWidget(self.release_api_input, 1)
+        self.save_release_source_button = QPushButton("Save source")
+        self.save_release_source_button.clicked.connect(self._save_release_source)
+        source_row.addWidget(self.save_release_source_button)
+        update_layout.addLayout(source_row)
         layout.addWidget(update_group)
+        if not self.release_api_input.text().strip():
+            self.update_status.setText(
+                f"Installed version: {__version__}. Configure your public GitHub Releases API URL below."
+            )
 
         self._update_worker: _UpdateWorker | None = None
         self._pending_update: UpdateInfo | None = None
@@ -142,15 +167,30 @@ class ThemeSettingsDialog(QDialog):
         for category, group in self._groups.items():
             group.setHidden(not any(not self._items[k].isHidden() for k in THEMES if THEMES[k].category == category))
 
+    def _save_release_source(self) -> bool:
+        try:
+            source = validate_release_api_url(self.release_api_input.text())
+        except Exception as exc:
+            self.update_status.setText(f"Invalid release source: {exc}")
+            return False
+        self.release_api_input.setText(source)
+        self._settings.setValue("updates/release_api", source)
+        self._settings.sync()
+        self.update_status.setText("Release source saved. Select Check for updates to query it.")
+        return True
+
     def _check_for_updates(self) -> None:
         if self._update_worker is not None and self._update_worker.isRunning():
             return
+        if not self._save_release_source():
+            return
         self.check_updates_button.setEnabled(False)
-        self.update_status.setText("Checking GitHub Releases…")
+        self.update_status.setText("Checking configured GitHub Releases endpoint…")
         self._start_update_worker("check")
 
     def _start_update_worker(self, mode: str, info: UpdateInfo | None = None) -> None:
-        worker = _UpdateWorker(mode, info, self)
+        endpoint = str(self._settings.value("updates/release_api", ""))
+        worker = _UpdateWorker(mode, info, endpoint, self)
         self._update_worker = worker
         worker.result.connect(self._update_finished)
         worker.start()

@@ -20,11 +20,13 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "src"))
+from animevault._version import __version__ as APP_VERSION
+
 DIST = ROOT / "dist" / "AnimeVault"
 ICON = ROOT / "src" / "animevault" / "resources" / "media" / "app.ico"
 
 APP_NAME = "AnimeVault"
-APP_VERSION = "0.3.0"
 
 # ── Launcher ──────────────────────────────────────────────────────
 # Runs inside the stub's own bundled interpreter.
@@ -33,7 +35,7 @@ LAUNCHER = r'''
 import os, sys, shutil, zipfile, subprocess, tempfile
 
 APP_NAME = "AnimeVault"
-APP_VERSION = "0.3.0"
+APP_VERSION = "__APP_VERSION__"
 # Stable GUID: repeat installs upgrade instead of duplicating.
 APP_ID = r"{7B2C9E14-6A3D-4F58-9C21-5E8D4A6F1B93}"
 
@@ -185,8 +187,7 @@ def main():
 if __name__ == "__main__":
     main()
 '''
-
-
+LAUNCHER = LAUNCHER.replace("__APP_VERSION__", APP_VERSION)
 
 
 def build_uninstaller() -> Path:

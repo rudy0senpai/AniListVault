@@ -14,7 +14,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
-LATEST_RELEASE_API = "https://api.github.com/repos/rudy0senpai/AniListVault/releases/latest"
+RELEASE_API_ENV = "ANIMEVAULT_RELEASE_API"
 _INSTALLER_NAME = "AnimeVault-Setup.exe"
 _MAX_INSTALLER_BYTES = 512 * 1024 * 1024
 _VERSION_RE = re.compile(r"^v?(\d+(?:\.\d+){1,3})$", re.IGNORECASE)
@@ -60,8 +60,8 @@ def parse_release_payload(payload: dict, current_version: str) -> UpdateInfo | N
         return None
 
     page_url = payload.get("html_url", "")
-    if not _is_https(page_url):
-        raise UpdateError("The release page URL is not HTTPS.")
+    if not _is_github_https(page_url):
+        raise UpdateError("The release page URL is not an official GitHub HTTPS URL.")
 
     asset_url = None
     digest = None
@@ -69,7 +69,7 @@ def parse_release_payload(payload: dict, current_version: str) -> UpdateInfo | N
         if not isinstance(asset, dict) or asset.get("name") != _INSTALLER_NAME:
             continue
         candidate_url = asset.get("browser_download_url", "")
-        if _is_https(candidate_url):
+        if _is_github_https(candidate_url):
             asset_url = candidate_url
             raw_digest = asset.get("digest", "")
             if isinstance(raw_digest, str) and raw_digest.startswith("sha256:"):
@@ -92,10 +92,47 @@ def _is_https(url: object) -> bool:
     return isinstance(url, str) and urlparse(url).scheme == "https" and bool(urlparse(url).hostname)
 
 
-def check_for_updates(current_version: str, *, timeout: float = 12.0) -> UpdateInfo | None:
-    """Query the public latest stable release; returns None when current."""
+def _is_github_https(url: object) -> bool:
+    parsed = urlparse(url) if isinstance(url, str) else None
+    return bool(
+        parsed
+        and parsed.scheme == "https"
+        and parsed.hostname in {"github.com", "www.github.com"}
+        and not parsed.username
+        and not parsed.password
+    )
+
+
+def validate_release_api_url(value: str) -> str:
+    """Accept only an official public GitHub latest-release API endpoint."""
+    candidate = (value or "").strip()
+    parsed = urlparse(candidate)
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != "api.github.com"
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+        or not re.fullmatch(r"/repos/[^/]+/[^/]+/releases/latest/?", parsed.path)
+    ):
+        raise UpdateError(
+            "Enter an official HTTPS GitHub Releases API URL: "
+            "https://api.github.com/repos/OWNER/REPO/releases/latest"
+        )
+    return candidate.rstrip("/")
+
+
+def check_for_updates(
+    current_version: str,
+    *,
+    timeout: float = 12.0,
+    release_api: str | None = None,
+) -> UpdateInfo | None:
+    """Query a configured official GitHub release endpoint."""
+    endpoint = validate_release_api_url(release_api or os.environ.get(RELEASE_API_ENV, ""))
     request = Request(
-        LATEST_RELEASE_API,
+        endpoint,
         headers={
             "Accept": "application/vnd.github+json",
             "User-Agent": "AnimeVault-Update-Checker",
@@ -107,7 +144,7 @@ def check_for_updates(current_version: str, *, timeout: float = 12.0) -> UpdateI
             payload = json.loads(response.read(2 * 1024 * 1024).decode("utf-8"))
     except HTTPError as exc:
         if exc.code == 404:
-            return None  # No published GitHub Release yet.
+            raise UpdateError("The configured release endpoint returned 404; verify its public repository and release path.") from exc
         raise UpdateError(f"GitHub update check failed (HTTP {exc.code}).") from exc
     except (URLError, TimeoutError, OSError, ValueError) as exc:
         raise UpdateError(f"Could not check for updates: {exc}") from exc
@@ -118,8 +155,8 @@ def download_installer(info: UpdateInfo, destination: str | Path) -> Path:
     """Download a release setup executable and atomically verify SHA-256."""
     if not info.installer_url or not info.sha256:
         raise UpdateError("This release has no HTTPS installer with a SHA-256 digest.")
-    if not _is_https(info.installer_url):
-        raise UpdateError("Refusing to download an installer over a non-HTTPS URL.")
+    if not _is_github_https(info.installer_url):
+        raise UpdateError("Refusing to download an installer from an unverified release host.")
 
     directory = Path(destination)
     directory.mkdir(parents=True, exist_ok=True)

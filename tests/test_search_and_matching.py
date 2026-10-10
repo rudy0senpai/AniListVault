@@ -69,6 +69,17 @@ class TestSearchAndMatching:
         assert p1.call_count == 1
         assert p2.call_count == 1
 
+    def test_permanent_provider_errors_are_not_reported_as_not_found(self):
+        provider = DummyProvider(
+            "blocked_provider",
+            ProviderError("403 Forbidden", status_code=403, retryable=False),
+        )
+        service = SearchService(providers=[provider])
+        with pytest.raises(ProviderError) as exc_info:
+            service.search("Any title")
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.provider == "blocked_provider"
+
     def test_candidate_ranking_exact_match(self):
         m1 = AnimeMetadata(title="Boruto: Naruto Next Generations", episodes=293)
         m2 = AnimeMetadata(title="Naruto: Shippuuden", episodes=500)

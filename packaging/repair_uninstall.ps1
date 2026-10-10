@@ -38,7 +38,11 @@ if (Test-Path $cleanup) {
 # 3. Write the registry entry Windows needs for a working Uninstall button.
 New-Item -Path $key -Force | Out-Null
 Set-ItemProperty -Path $key -Name "DisplayName"     -Value "AnimeVault"
-Set-ItemProperty -Path $key -Name "DisplayVersion"  -Value "0.3.0"
+$versionSource = Join-Path $PSScriptRoot "..\src\animevault\_version.py"
+$versionMatch = [regex]::Match((Get-Content -LiteralPath $versionSource -Raw), '__version__\s*=\s*"([^"]+)"')
+if (-not $versionMatch.Success) { throw "Could not load canonical app version from $versionSource" }
+$appVersion = $versionMatch.Groups[1].Value
+Set-ItemProperty -Path $key -Name "DisplayVersion"  -Value $appVersion
 Set-ItemProperty -Path $key -Name "Publisher"       -Value "AnimeVault"
 Set-ItemProperty -Path $key -Name "DisplayIcon"     -Value (Join-Path $installDir "AnimeVault.exe")
 Set-ItemProperty -Path $key -Name "InstallLocation" -Value $installDir

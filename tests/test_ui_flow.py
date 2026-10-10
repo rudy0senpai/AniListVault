@@ -20,18 +20,29 @@ class TestUIFlow:
     def setup_class(cls):
         cls.app = QApplication.instance() or QApplication([])
 
-    def test_overview_can_hide_and_reopen(self, migrated_database):
+    def test_overview_can_hide_and_reopen(self, migrated_database, tmp_path):
+        from PySide6.QtCore import QSettings
         from animevault.ui.main_window import MainWindow
 
+        QSettings.setDefaultFormat(QSettings.Format.IniFormat)
+        QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, str(tmp_path))
+        settings = QSettings("AnimeVault", "AnimeVault")
+        settings.clear()
         window = MainWindow()
         assert window._overview_toggle.text() == ">>"
         window._overview_toggle.click()
         assert window._overview.isHidden()
+        assert window._overview_container.width() <= 42
+        assert window._overview_toggle.toolTip() == "Show Overview"
         assert window._overview_toggle.text() == "<<"
-        window._overview_toggle.click()
-        assert not window._overview.isHidden()
-        assert window._overview_toggle.text() == ">>"
         window.close()
+        restored = MainWindow()
+        assert restored._overview.isHidden()
+        restored._overview_toggle.click()
+        assert not restored._overview.isHidden()
+        assert restored._overview_toggle.text() == ">>"
+        restored.close()
+        settings.clear()
 
     def test_add_anime_dialog_manual_entry(self, isolated_database):
         dlg = AddAnimeDialog()

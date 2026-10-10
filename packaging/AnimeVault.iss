@@ -5,14 +5,21 @@
 ;
 ; Build with:
 ;     packaging\build_windows.ps1
-; or directly:
-;     iscc packaging\AnimeVault.iss
+; (the build script reads the canonical version and uses a fresh staging path).
 
 #define AppName "AnimeVault"
-#define AppVersion "0.3.0"
+#define AppVersion GetEnv("ANIMEVAULT_VERSION")
+#if AppVersion == ""
+  #error "Run packaging/build_windows.ps1 to supply the version from src/animevault/_version.py"
+#endif
 #define AppPublisher "rudy0senpai"
 #define AppExeName "AnimeVault.exe"
-#define SourceDir "..\dist\AnimeVault"
+#ifndef SourceDir
+  #define SourceDir "..\dist\AnimeVault"
+#endif
+#ifndef OutputDir
+  #define OutputDir "..\dist"
+#endif
 
 [Setup]
 AppId={{7B2C9E14-6A3D-4F58-9C21-5E8D4A6F1B93}
@@ -23,7 +30,7 @@ AppPublisher={#AppPublisher}
 DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
-OutputDir=..\dist
+OutputDir={#OutputDir}
 OutputBaseFilename=AnimeVault-Setup
 Compression=lzma2/max
 SolidCompression=yes
@@ -55,9 +62,3 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: deskto
 [Run]
 Filename: "{app}\{#AppExeName}"; Description: "Launch {#AppName}"; \
     Flags: nowait postinstall skipifsilent
-
-[UninstallDelete]
-; Cached data and downloads live outside the install folder, so they are
-; removed explicitly on uninstall.
-Type: filesandordirs; Name: "{userappdata}\AnimeVault\cache"
-Type: filesandordirs; Name: "{userappdata}\AnimeVault\posters"

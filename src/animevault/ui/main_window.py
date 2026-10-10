@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtCore import QSize, Qt, Signal, QSettings
 from PySide6.QtGui import QAction, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QComboBox,
@@ -70,6 +70,8 @@ class MainWindow(QMainWindow):
 
         self._bulk_worker = None
         self._progress_dialog: Optional[QProgressDialog] = None
+        self._failed_items: list = []
+        self._last_enrichment_stats: dict = {}
 
         self._category = MEDIA_ANIME
         self._search_text = ""
@@ -78,6 +80,7 @@ class MainWindow(QMainWindow):
         self._filter_tier = "all"
         self._sort_mode = "title"
         self._select_mode = False
+        self._settings = QSettings("AnimeVault", "AnimeVault")
 
         self._build_ui()
         self._build_shortcuts()
@@ -122,14 +125,14 @@ class MainWindow(QMainWindow):
         overview_layout = QVBoxLayout(self._overview_container)
         overview_layout.setContentsMargins(0, 0, 0, 0)
         overview_layout.setSpacing(2)
-        overview_header = QWidget()
-        overview_header.setObjectName("overviewHeader")
-        overview_header_layout = QHBoxLayout(overview_header)
+        self._overview_header = QWidget()
+        self._overview_header.setObjectName("overviewHeader")
+        overview_header_layout = QHBoxLayout(self._overview_header)
         overview_header_layout.setContentsMargins(14, 8, 14, 0)
         overview_header_layout.setSpacing(8)
-        overview_title = QLabel("Overview")
-        overview_title.setObjectName("panelTitle")
-        overview_header_layout.addWidget(overview_title)
+        self._overview_title = QLabel("Overview")
+        self._overview_title.setObjectName("panelTitle")
+        overview_header_layout.addWidget(self._overview_title)
         overview_header_layout.addStretch(1)
         self._overview_toggle = QPushButton(">>")
         self._overview_toggle.setObjectName("overviewToggle")
@@ -138,7 +141,7 @@ class MainWindow(QMainWindow):
         self._overview_toggle.setAccessibleName("Hide overview")
         self._overview_toggle.clicked.connect(self._toggle_overview)
         overview_header_layout.addWidget(self._overview_toggle)
-        overview_layout.addWidget(overview_header)
+        overview_layout.addWidget(self._overview_header)
 
         self._overview = OverviewPanel()
         overview_layout.addWidget(self._overview, 1)
@@ -149,23 +152,33 @@ class MainWindow(QMainWindow):
         # Keep the background sized to the window, and behind the content.
         self._background.lower()
         central.installEventFilter(self)
+        visible = self._settings.value("ui/overview_visible", True, type=bool)
+        self._set_overview_visible(visible, persist=False)
+
+    def _set_overview_visible(self, visible: bool, *, persist: bool = True) -> None:
+        self._overview.setVisible(visible)
+        self._overview_title.setVisible(visible)
+        header_layout = self._overview_header.layout()
+        header_layout.setContentsMargins(14, 8, 14, 0) if visible else header_layout.setContentsMargins(0, 8, 0, 0)
+        header_layout.setSpacing(8 if visible else 0)
+        if visible:
+            self._overview_container.setMinimumWidth(230)
+            self._overview_container.setMaximumWidth(16777215)
+            self._overview_toggle.setText(">>")
+            self._overview_toggle.setToolTip("Hide Overview")
+            self._overview_toggle.setAccessibleName("Hide Overview")
+        else:
+            self._overview_container.setFixedWidth(42)
+            self._overview_toggle.setText("<<")
+            self._overview_toggle.setToolTip("Show Overview")
+            self._overview_toggle.setAccessibleName("Show Overview")
+        if persist:
+            self._settings.setValue("ui/overview_visible", visible)
+            self._settings.sync()
 
     def _toggle_overview(self) -> None:
-        """Collapse the analytics sidebar while leaving a reopen control visible."""
-        hidden = not self._overview.isHidden()
-        self._overview.setVisible(not hidden)
-        if hidden:
-            self._overview_container.setFixedWidth(130)
-            self._overview_toggle.setText("<<")
-            self._overview_toggle.setToolTip("Show overview")
-            self._overview_toggle.setAccessibleName("Show overview")
-        else:
-            self._overview_container.setMinimumWidth(0)
-            self._overview_container.setMaximumWidth(16777215)
-            self._overview_container.setMinimumWidth(230)
-            self._overview_toggle.setText(">>")
-            self._overview_toggle.setToolTip("Hide overview")
-            self._overview_toggle.setAccessibleName("Hide overview")
+        """Hide the statistics sidebar while retaining a narrow restore control."""
+        self._set_overview_visible(self._overview.isHidden())
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
@@ -239,6 +252,7 @@ class MainWindow(QMainWindow):
         menu.addSeparator()
         export_csv = menu.addAction("Export to CSV…")
         export_xlsx = menu.addAction("Export to Excel (.xlsx)…")
+        export_ods = menu.addAction("Export to OpenDocument (.ods)…")
         export_sql = menu.addAction("Export to SQL Dump…")
         menu.addSeparator()
         backup_action = menu.addAction("Back Up Database")
@@ -279,6 +293,7 @@ class MainWindow(QMainWindow):
         export_menu = QMenu(export_btn)
         export_csv_btn = export_menu.addAction("Export to CSV…")
         export_xlsx_btn = export_menu.addAction("Export to Excel (.xlsx)…")
+        export_ods_btn = export_menu.addAction("Export to OpenDocument (.ods)…")
         export_sql_btn = export_menu.addAction("Export to SQL Dump…")
         export_btn.setMenu(export_menu)
         row.addWidget(export_btn)
@@ -300,6 +315,12 @@ class MainWindow(QMainWindow):
         fetch_btn.clicked.connect(lambda: self._on_bulk_enrich(False))
         row.addWidget(fetch_btn)
 
+        self._retry_failed_button = QPushButton("↻  Retry Failed")
+        self._retry_failed_button.setObjectName("toolButton")
+        self._retry_failed_button.setEnabled(False)
+        self._retry_failed_button.clicked.connect(self._retry_failed_enrichment)
+        row.addWidget(self._retry_failed_button)
+
         row.addStretch()
 
         # Connect menu actions
@@ -313,6 +334,8 @@ class MainWindow(QMainWindow):
             action.triggered.connect(lambda: self._on_export("csv"))
         for action in (export_xlsx, export_xlsx_btn):
             action.triggered.connect(lambda: self._on_export("xlsx"))
+        for action in (export_ods, export_ods_btn):
+            action.triggered.connect(lambda: self._on_export("ods"))
         for action in (export_sql, export_sql_btn):
             action.triggered.connect(lambda: self._on_export("sql"))
         backup_action.triggered.connect(self._on_backup)
@@ -662,15 +685,16 @@ class MainWindow(QMainWindow):
     # ── Export ─────────────────────────────────────────────────────
 
     def _on_export(self, fmt: str) -> None:
-        """Export the library to CSV, XLSX or a SQL dump."""
+        """Export the library to CSV, XLSX, ODS or a SQL dump."""
         from animevault.services.importers.exporter import export_library
 
         filters = {
             "csv": "CSV Files (*.csv)",
             "xlsx": "Excel Files (*.xlsx)",
+            "ods": "OpenDocument Files (*.ods)",
             "sql": "SQL Files (*.sql)",
         }
-        default_ext = {"csv": "csv", "xlsx": "xlsx", "sql": "sql"}[fmt]
+        default_ext = {"csv": "csv", "xlsx": "xlsx", "ods": "ods", "sql": "sql"}[fmt]
         suggested = str(Path.home() / f"animevault-export.{default_ext}")
 
         path, _ = QFileDialog.getSaveFileName(
@@ -730,17 +754,18 @@ class MainWindow(QMainWindow):
 
     # ── Bulk enrichment ────────────────────────────────────────────
 
-    def _on_bulk_enrich(self, refresh_all: bool) -> None:
+    def _on_bulk_enrich(self, refresh_all: bool, items: list | None = None) -> None:
         from animevault.services.workers import BulkEnrichmentWorker
 
-        animes = Anime.all()
-        literature = Literature.all()
-        if not animes and not literature:
+        if items is None:
+            animes = Anime.all()
+            literature = Literature.all()
+            items = animes + literature
+        if not items:
             QMessageBox.information(self, "Empty Library", "There is nothing to enrich.")
             return
 
         title_mode = "Refreshing All Data" if refresh_all else "Fetching Missing Data"
-        items = animes + literature
         self._progress_dialog = QProgressDialog(
             "Initializing fetcher...", "Cancel", 0, len(items), self
         )
@@ -761,6 +786,7 @@ class MainWindow(QMainWindow):
         self._progress_dialog.canceled.connect(self._bulk_worker.cancel)
         self._bulk_worker.progress.connect(self._on_bulk_progress)
         self._bulk_worker.enrichment_finished.connect(self._on_bulk_finished)
+        self._bulk_worker.poster_ready.connect(self._on_poster_ready)
         self._bulk_worker.start()
 
     def _on_bulk_progress(self, current, total, message, stats) -> None:
@@ -772,29 +798,113 @@ class MainWindow(QMainWindow):
                 f"Metadata: {stats.get('metadata_completed', 0)} | "
                 f"Posters: {stats.get('poster_completed', 0)} "
                 f"(failed {stats.get('poster_failed', 0)}) | "
-                f"Cached: {stats.get('cached', 0)} | "
-                f"Failed: {stats.get('failed', 0)}"
+                f"Cache hits: {stats.get('cached', 0)} | "
+                f"Already complete: {stats.get('skipped_complete', 0)} | "
+                f"Metadata failed: {stats.get('failed', 0)} | "
+                f"No match: {stats.get('not_found', 0)}"
             )
+
+    def _on_poster_ready(self, item_id: int, path: str) -> None:
+        """Update the visible card as soon as its cover is available."""
+        for card in self._grid.cards:
+            item = getattr(card, "item", None)
+            if getattr(item, "id", None) != item_id:
+                continue
+            if isinstance(item, Literature):
+                item.cover_path = path
+            else:
+                item.poster_path = path
+            card.refresh_art(path)
 
     def _on_bulk_finished(self, stats) -> None:
         if self._progress_dialog:
             self._progress_dialog.close()
         self.library_changed.emit()
-        QMessageBox.information(
-            self,
-            "Enrichment Complete",
-            f"• Updated: {stats.get('updated', 0)}\n"
-            f"• Cached/Skipped: {stats.get('cached', 0)}\n"
-            f"• Failed: {stats.get('failed', 0)}",
+        self._last_enrichment_stats = dict(stats)
+        failure_details = list(stats.get("failure_details", []))
+        failed_ids = {
+            row.get("item_id") for row in failure_details if row.get("item_id") is not None
+        }
+        all_items = Anime.all() + Literature.all()
+        self._failed_items = [item for item in all_items if getattr(item, "id", None) in failed_ids]
+        self._retry_failed_button.setEnabled(bool(self._failed_items))
+
+        summary = (
+            f"Total records: {stats.get('total', 0)}  |  Unique titles: {stats.get('unique_titles', 0)}  |  Tasks: {stats.get('total_tasks', 0)}\n"
+            f"Metadata updated: {stats.get('updated', 0)}  |  Cache hits: {stats.get('cached', 0)}\n"
+            f"Already complete/skipped: {stats.get('skipped_complete', 0)}\n"
+            f"Posters downloaded: {stats.get('poster_completed', 0)}  |  Poster failures: {stats.get('poster_failed', 0)}\n"
+            f"Metadata failures: {stats.get('failed', 0)}  |  No matching title: {stats.get('not_found', 0)}  |  Permanently unresolved: {stats.get('permanently_unresolved', 0)}\n"
+            f"Retries: {stats.get('retry_attempts', 0)}  |  Cancelled: {stats.get('cancelled', 0)}"
         )
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle("Enrichment Summary")
+        dialog.setText(summary)
+        dialog.addButton("Close", QMessageBox.ButtonRole.RejectRole)
+        export_button = None
+        retry_button = None
+        if failure_details:
+            export_button = dialog.addButton("Export Failure Report…", QMessageBox.ButtonRole.ActionRole)
+        if self._failed_items:
+            retry_button = dialog.addButton("Retry Failed", QMessageBox.ButtonRole.ActionRole)
+        dialog.exec()
+        clicked = dialog.clickedButton()
+        if clicked is export_button and export_button is not None:
+            self._export_enrichment_report()
+        elif clicked is retry_button and retry_button is not None:
+            self._retry_failed_enrichment()
+
+    def _retry_failed_enrichment(self) -> None:
+        if not self._failed_items or self._bulk_worker is not None and self._bulk_worker.isRunning():
+            return
+        retry_items = list(self._failed_items)
+        self._failed_items = []
+        self._retry_failed_button.setEnabled(False)
+        self._on_bulk_enrich(False, items=retry_items)
+
+    def _export_enrichment_report(self) -> None:
+        import csv
+        import json
+
+        rows = list(self._last_enrichment_stats.get("failure_details", []))
+        if not rows:
+            QMessageBox.information(self, "Failure Report", "There are no failed tasks to export.")
+            return
+        path, selected = QFileDialog.getSaveFileName(
+            self,
+            "Export Enrichment Failure Report",
+            "enrichment-failures.json",
+            "JSON (*.json);;CSV (*.csv)",
+        )
+        if not path:
+            return
+        target = Path(path)
+        if not target.suffix:
+            target = target.with_suffix(".csv" if "CSV" in selected else ".json")
+        try:
+            if target.suffix.lower() == ".csv":
+                columns = list(rows[0])
+                with target.open("w", newline="", encoding="utf-8-sig") as handle:
+                    writer = csv.DictWriter(handle, fieldnames=columns, extrasaction="ignore")
+                    writer.writeheader()
+                    writer.writerows(rows)
+            else:
+                target.write_text(json.dumps(rows, indent=2, ensure_ascii=False), encoding="utf-8")
+        except OSError as exc:
+            QMessageBox.warning(self, "Failure Report", f"Could not write the report:\n{exc}")
+        else:
+            QMessageBox.information(self, "Failure Report", f"Report saved to:\n{target}")
+
 
     # ── Menus / dialogs ────────────────────────────────────────────
 
     def _show_about(self) -> None:
+        from animevault import __version__
+
         QMessageBox.about(
             self,
             "About AnimeVault",
-            "<b>AnimeVault</b> v0.3.0<br>"
+            f"<b>AnimeVault</b> v{__version__}<br>"
             "Anime, Manga, Manhwa and Manhua library manager with "
             "multi-provider metadata enrichment.<br><br>"
             "Built with PySide6 and SQLite.",

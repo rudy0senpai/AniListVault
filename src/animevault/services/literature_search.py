@@ -13,6 +13,7 @@ from animevault.services.providers.literature import (
     LiteratureMetadata,
 )
 from animevault.services.providers.base import ProviderError
+from animevault.services.diagnostics import sanitize_error
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,7 @@ class LiteratureSearchService:
         self._providers = providers if providers is not None else [
             AniListLiteratureProvider(),
         ]
+        self.last_cache_hit = False
 
     @property
     def providers(self) -> list:
@@ -54,17 +56,19 @@ class LiteratureSearchService:
         self, query: str, limit: int = 15, *, force_refresh: bool = False
     ) -> list[LiteratureMetadata]:
         q = (query or "").strip()
+        self.last_cache_hit = False
         if not q:
             return []
 
         cache_key = f"search:literature:{q.casefold()}:{int(limit)}"
         cached = None if force_refresh else cache.get(cache_key, ttl=cache.TTL_METADATA)
         if cached is not None and isinstance(cached, list):
+            self.last_cache_hit = True
             return [LiteratureMetadata(**item) for item in cached]
 
         results: list[LiteratureMetadata] = []
         seen: set = set()
-        last_retryable_error: ProviderError | None = None
+        last_provider_error: ProviderError | None = None
 
         for provider in self._providers:
             if not provider.is_available():
@@ -80,16 +84,17 @@ class LiteratureSearchService:
                     seen.add(key)
                     results.append(meta)
             except ProviderError as exc:
-                logger.warning("Literature provider %s failed: %s", provider.name, exc)
-                if exc.retryable:
-                    last_retryable_error = exc
+                exc.provider = exc.provider or provider.name
+                logger.warning("Literature provider %s failed: %s", provider.name, sanitize_error(exc))
+                if exc.status_code != 404:
+                    last_provider_error = exc
                 continue
             except Exception as exc:
-                logger.warning("Literature provider %s failed: %s", provider.name, exc)
+                logger.warning("Literature provider %s failed: %s", provider.name, sanitize_error(exc))
                 continue
 
-        if not results and last_retryable_error is not None:
-            raise last_retryable_error
+        if not results and last_provider_error is not None:
+            raise last_provider_error
 
         results.sort(
             key=lambda m: calculate_literature_match_score(q, m), reverse=True

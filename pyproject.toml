@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "animevault"
-version = "0.3.0"
-description = "A desktop anime library manager — v0.01 minimal manual-entry edition."
+dynamic = ["version"]
+description = "A desktop anime, manga, manhwa and manhua library manager."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -27,6 +27,9 @@ animevault = "animevault.cli:main"
 # Windowed entry point used by the frozen Windows build.
 [project.gui-scripts]
 animevault-gui = "animevault.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "animevault._version.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["src"]

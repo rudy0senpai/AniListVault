@@ -1,6 +1,3 @@
-"""AnimeVault — a desktop anime library manager.
+"""AnimeVault — a desktop anime, manga, manhwa and manhua library manager."""
 
-v0.01: minimal manual-entry edition with PySide6 + SQLite.
-"""
-
-__version__ = "0.3.0"
+from animevault._version import __version__

@@ -8,6 +8,7 @@ by the matching importer without losing personal data.
 from __future__ import annotations
 
 import csv
+import datetime as dt
 import logging
 import sqlite3
 import tempfile
@@ -25,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 COLUMNS: tuple[str, ...] = (
     "media_type",
+    "internal_id",
     "title",
     "title_native",
     "title_en",
@@ -34,8 +36,10 @@ COLUMNS: tuple[str, ...] = (
     "chapters",
     "chapters_read",
     "volumes",
+    "volumes_read",
     "status",
     "tier",
+    "score",
     "rewatches",
     "favorite",
     "progress",
@@ -46,6 +50,9 @@ COLUMNS: tuple[str, ...] = (
     "completed_date",
     "privacy",
     "media_format",
+    "airing_status",
+    "pub_status",
+    "serialization",
     "genres",
     "studios",
     "authors",
@@ -66,11 +73,18 @@ COLUMNS: tuple[str, ...] = (
     "anidb_id",
     "source_provider",
     "metadata_fetched_at",
+    "poster_url",
     "poster_path",
 )
 
 #: Human-facing column labels, reused by the export UI.
+DATE_COLUMNS = frozenset({
+    "first_read", "last_read", "completed_date", "aired_from", "aired_to",
+    "started_at", "ended_at", "metadata_fetched_at",
+})
+
 COLUMN_LABELS: dict[str, str] = {
+    "internal_id": "Internal ID",
     "media_type": "Media Type",
     "title": "Title",
     "title_native": "Native Title",
@@ -81,8 +95,10 @@ COLUMN_LABELS: dict[str, str] = {
     "chapters": "Chapters",
     "chapters_read": "Chapters Read",
     "volumes": "Volumes",
+    "volumes_read": "Volumes Read",
     "status": "Status",
     "tier": "Tier",
+    "score": "Legacy Score",
     "rewatches": "Rewatches",
     "favorite": "Favorite",
     "progress": "Progress",
@@ -93,6 +109,9 @@ COLUMN_LABELS: dict[str, str] = {
     "completed_date": "Completed Date",
     "privacy": "Privacy",
     "media_format": "Format",
+    "airing_status": "Airing Status",
+    "pub_status": "Publication Status",
+    "serialization": "Serialization",
     "genres": "Genres",
     "studios": "Studios",
     "authors": "Authors",
@@ -113,6 +132,7 @@ COLUMN_LABELS: dict[str, str] = {
     "anidb_id": "AniDB ID",
     "source_provider": "Source",
     "metadata_fetched_at": "Fetched At",
+    "poster_url": "Poster URL",
     "poster_path": "Poster Path",
 }
 
@@ -126,6 +146,7 @@ def anime_to_row(anime: Anime) -> dict:
     watched = anime.episodes_watched or 0
     total = anime.episodes or 0
     return {
+        "internal_id": anime.id,
         "media_type": MEDIA_ANIME,
         "title": anime.title,
         "title_native": anime.title_ja,
@@ -136,10 +157,12 @@ def anime_to_row(anime: Anime) -> dict:
         "chapters": "",
         "chapters_read": "",
         "volumes": "",
+        "volumes_read": "",
         "status": anime.status,
         "tier": anime.tier or "",
+        "score": anime.score,
         "rewatches": anime.rewatches or 0,
-        "favorite": "Yes" if anime.favorite else "No",
+        "favorite": bool(anime.favorite),
         "progress": f"{watched} / {total}" if total else "",
         "progress_percent": min(100, round(watched * 100 / total)) if total else 0,
         "notes": anime.notes,
@@ -148,6 +171,9 @@ def anime_to_row(anime: Anime) -> dict:
         "completed_date": anime.completed_date,
         "privacy": anime.privacy or "public",
         "media_format": anime.media_type,
+        "airing_status": anime.airing_status,
+        "pub_status": "",
+        "serialization": "",
         "genres": _join(anime.genres),
         "studios": _join(anime.studios),
         "authors": "",
@@ -168,6 +194,7 @@ def anime_to_row(anime: Anime) -> dict:
         "anidb_id": anime.anidb_id or "",
         "source_provider": anime.source_provider,
         "metadata_fetched_at": anime.metadata_fetched_at,
+        "poster_url": anime.poster_url,
         "poster_path": anime.poster_path,
     }
 
@@ -177,6 +204,7 @@ def literature_to_row(item: Literature) -> dict:
     read = item.chapters_read or 0
     total = item.chapters or 0
     return {
+        "internal_id": item.id,
         "media_type": item.category,
         "title": item.title,
         "title_native": item.title_native,
@@ -186,11 +214,13 @@ def literature_to_row(item: Literature) -> dict:
         "episodes_watched": "",
         "chapters": total,
         "chapters_read": read,
-        "volumes": item.volumes or "",
+        "volumes": item.volumes or 0,
+        "volumes_read": item.volumes_read or 0,
         "status": item.status,
         "tier": item.tier or "",
+        "score": "",
         "rewatches": item.rewatches or 0,
-        "favorite": "Yes" if item.favorite else "No",
+        "favorite": bool(item.favorite),
         "progress": f"{read} / {total}" if total else "",
         "progress_percent": item.progress_percent() if total else 0,
         "notes": item.notes,
@@ -199,6 +229,9 @@ def literature_to_row(item: Literature) -> dict:
         "completed_date": item.completed_date,
         "privacy": item.privacy or "public",
         "media_format": item.format,
+        "airing_status": "",
+        "pub_status": item.pub_status,
+        "serialization": item.serialization,
         "genres": _join(item.genres),
         "studios": "",
         "authors": _join(item.authors),
@@ -219,6 +252,7 @@ def literature_to_row(item: Literature) -> dict:
         "anidb_id": "",
         "source_provider": item.source_provider,
         "metadata_fetched_at": item.metadata_fetched_at,
+        "poster_url": item.cover_url,
         "poster_path": item.cover_path,
     }
 
@@ -262,13 +296,42 @@ def export_csv(path: str | Path, rows: list[dict]) -> Path:
     return path
 
 
+def _spreadsheet_value(column: str, value):
+    """Convert stored ISO date strings to native spreadsheet date values."""
+    if column not in DATE_COLUMNS or not value or isinstance(value, (dt.date, dt.datetime)):
+        return value
+    text = str(value).strip()
+    if len(text) == 10:
+        try:
+            return dt.date.fromisoformat(text)
+        except ValueError:
+            pass
+    try:
+        parsed = dt.datetime.fromisoformat(text.replace("Z", "+00:00"))
+        return parsed.replace(tzinfo=None) if parsed.tzinfo else parsed
+    except ValueError:
+        try:
+            return dt.date.fromisoformat(text)
+        except ValueError:
+            return value
+
+
 def export_xlsx(path: str | Path, rows: list[dict]) -> Path:
-    """Write rows to a real .xlsx workbook (shared strings + inline values)."""
+    """Write a real .xlsx workbook with typed cells and standard worksheet controls."""
     from animevault.services.importers.xlsx_writer import write_sheet
 
     headers = [COLUMN_LABELS.get(c, c) for c in COLUMNS]
-    body = [[row.get(c, "") for c in COLUMNS] for row in rows]
-    return write_sheet(path, headers, body, sheet_name="AnimeVault")
+    body = [[_spreadsheet_value(c, row.get(c, "")) for c in COLUMNS] for row in rows]
+    return write_sheet(path, headers, body, sheet_name="AniListVault Library")
+
+
+def export_ods(path: str | Path, rows: list[dict]) -> Path:
+    """Write an ODS spreadsheet using the canonical columns and typed values."""
+    from animevault.services.importers.ods_writer import write_ods
+
+    headers = [COLUMN_LABELS.get(c, c) for c in COLUMNS]
+    body = [[_spreadsheet_value(c, row.get(c, "")) for c in COLUMNS] for row in rows]
+    return write_ods(path, headers, body, sheet_name="AniListVault Library")
 
 
 def _schema_statements() -> list[str]:
@@ -373,6 +436,7 @@ def _metadata_insert_sql(table: str, row: dict, is_anime: bool) -> str:
         columns = [
             ("title_en", row.get("title_en")),
             ("synopsis", row.get("synopsis")),
+            ("airing_status", row.get("airing_status")),
             ("media_type", row.get("media_format")),
             ("genres", _split(row.get("genres"))),
             ("studios", _split(row.get("studios"))),
@@ -381,11 +445,13 @@ def _metadata_insert_sql(table: str, row: dict, is_anime: bool) -> str:
             ("season", row.get("season")),
             ("season_year", row.get("season_year")),
             ("duration", row.get("duration")),
+            ("poster_url", row.get("poster_url")),
             ("poster_path", row.get("poster_path")),
             ("mal_id", row.get("mal_id")),
             ("anilist_id", row.get("anilist_id")),
             ("kitsu_id", row.get("kitsu_id")),
             ("tmdb_id", row.get("tmdb_id")),
+            ("anidb_id", row.get("anidb_id")),
             ("source_provider", row.get("source_provider")),
             ("metadata_fetched_at", row.get("metadata_fetched_at")),
         ]
@@ -398,8 +464,11 @@ def _metadata_insert_sql(table: str, row: dict, is_anime: bool) -> str:
             ("genres", _split(row.get("genres"))),
             ("authors", _split(row.get("authors"))),
             ("artists", _split(row.get("artists"))),
+            ("serialization", row.get("serialization")),
+            ("pub_status", row.get("pub_status")),
             ("started_at", row.get("started_at")),
             ("ended_at", row.get("ended_at")),
+            ("cover_url", row.get("poster_url")),
             ("cover_path", row.get("poster_path")),
             ("anilist_id", row.get("anilist_id")),
             ("kitsu_id", row.get("kitsu_id")),
@@ -414,6 +483,12 @@ def _metadata_insert_sql(table: str, row: dict, is_anime: bool) -> str:
         f"INSERT INTO {meta_table} ({', '.join(cols)}) "
         f"VALUES ({', '.join(vals)});"
     )
+
+
+def _sql_bool(value) -> int:
+    if isinstance(value, bool):
+        return int(value)
+    return int(str(value).strip().casefold() in {"1", "true", "yes", "y"})
 
 
 def _sql_value(value) -> str:
@@ -432,33 +507,34 @@ def _insert_sql(table: str, row: dict, is_anime: bool) -> str:
     """Build one INSERT for *row* against *table*."""
     if is_anime:
         columns = [
-            "title", "title_ja", "episodes", "status", "score", "notes",
+            "id", "title", "title_ja", "episodes", "status", "score", "notes",
             "tier", "rewatches", "episodes_watched", "favorite",
             "first_watched", "last_watched", "completed_date", "privacy",
         ]
         values = [
-            row.get("title"), row.get("title_native"), row.get("episodes") or 0,
-            row.get("status") or "plan_to_watch", row.get("score") or "NULL",
+            row.get("internal_id"), row.get("title"), row.get("title_native"), row.get("episodes") or 0,
+            row.get("status") or "plan_to_watch", row.get("score"),
             row.get("notes"), row.get("tier") or None, row.get("rewatches") or 0,
             row.get("episodes_watched") or 0,
-            1 if str(row.get("favorite")).lower() == "yes" else 0,
+            _sql_bool(row.get("favorite")),
             row.get("first_read"), row.get("last_read"),
             row.get("completed_date"), row.get("privacy") or "public",
         ]
     else:
         columns = [
-            "category", "title", "title_native", "synonyms", "format", "status",
-            "tier", "rewatches", "chapters_read", "chapters", "volumes",
+            "id", "category", "title", "title_native", "synonyms", "format", "status",
+            "tier", "rewatches", "chapters_read", "chapters", "volumes", "volumes_read",
             "favorite", "notes", "first_read", "last_read", "completed_date",
             "privacy", "origin_country",
         ]
         values = [
-            row.get("media_type"), row.get("title"), row.get("title_native"),
+            row.get("internal_id"), row.get("media_type"), row.get("title"), row.get("title_native"),
             _split(row.get("synonyms")), row.get("media_format"),
             row.get("status") or "watching", row.get("tier") or None,
             row.get("rewatches") or 0, row.get("chapters_read") or 0,
             row.get("chapters") or 0, row.get("volumes") or 0,
-            1 if str(row.get("favorite")).lower() == "yes" else 0,
+            row.get("volumes_read") or 0,
+            _sql_bool(row.get("favorite")),
             row.get("notes"), row.get("first_read"), row.get("last_read"),
             row.get("completed_date"), row.get("privacy") or "public",
             row.get("origin_country"),
@@ -516,6 +592,8 @@ def export_library(
         export_csv(path, rows)
     elif fmt == "xlsx":
         export_xlsx(path, rows)
+    elif fmt == "ods":
+        export_ods(path, rows)
     elif fmt == "sql":
         export_sql(path, rows)
     else:

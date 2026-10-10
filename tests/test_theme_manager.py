@@ -41,8 +41,10 @@ def manager(app, tmp_path):
 
 def test_default_theme_and_complete_registry(manager):
     assert DEFAULT_THEME_ID == "minimal-simple"
-    assert len(THEMES) == 18
-    assert manager.active_theme.name == "Minimal Simple"
+    assert len(THEMES) == 25
+    required = {"minimal-simple", "midnight-blue", "amoled-black", "light", "dracula", "nord", "anime-neon", "sakura"}
+    assert required <= THEMES.keys()
+    assert manager.active_theme.name == "Minimal Dark"
     assert all(theme.id == key and theme.description for key, theme in THEMES.items())
 
 
@@ -88,6 +90,39 @@ def test_theme_picker_applies_and_persists_selection(manager):
     assert manager.theme_id == "ubuntu"
     assert manager.settings.value("appearance/theme_id") == "ubuntu"
     assert dialog.description.text() == THEMES["ubuntu"].description
+    dialog.reset_theme_button.click()
+    assert manager.theme_id == DEFAULT_THEME_ID
+    assert manager.settings.value("appearance/theme_id") == DEFAULT_THEME_ID
+    dialog.close()
+
+
+def test_invalid_theme_definition_falls_back_and_is_hidden_from_picker(manager):
+    from dataclasses import replace
+    from animevault.ui.theme_dialog import ThemeSettingsDialog
+
+    original = THEMES["dracula"]
+    THEMES["dracula"] = replace(original, accent="not-a-color")
+    try:
+        assert THEMES["dracula"].is_valid is False
+        assert manager.apply_theme("dracula") == DEFAULT_THEME_ID
+        dialog = ThemeSettingsDialog(manager=manager)
+        assert "dracula" not in dialog._items
+        dialog.close()
+    finally:
+        THEMES["dracula"] = original
+
+
+def test_update_source_is_validated_and_persisted(manager):
+    from animevault.ui.theme_dialog import ThemeSettingsDialog
+
+    dialog = ThemeSettingsDialog(manager=manager)
+    dialog.release_api_input.setText("https://example.com/releases/latest")
+    assert dialog._save_release_source() is False
+    dialog.release_api_input.setText(
+        "https://api.github.com/repos/sample-owner/sample-repo/releases/latest"
+    )
+    assert dialog._save_release_source() is True
+    assert dialog._settings.value("updates/release_api") == dialog.release_api_input.text()
     dialog.close()
 
 
