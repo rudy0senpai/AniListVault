@@ -5,9 +5,10 @@ toolchain (no Inno Setup / NSIS).  The launcher is itself a small
 PyInstaller program, so it carries its own interpreter and the end user
 needs nothing pre-installed.
 
-Run after PyInstaller has produced ``dist/AnimeVault``:
-
-    python packaging/build_installer.py
+Run on Windows. This alternative builder first invokes
+``packaging/build_windows.ps1 -SkipInstaller`` to perform a clean build from
+current source, then packages ``dist/AnimeVault.exe`` as
+``dist/AnimeVault-Portable-Setup.exe``. It never consumes an old onedir folder.
 """
 
 from __future__ import annotations
@@ -16,14 +17,17 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 import zipfile
+from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 from animevault._version import __version__ as APP_VERSION
 
-DIST = ROOT / "dist" / "AnimeVault"
+APP_EXE = ROOT / "dist" / "AnimeVault.exe"
+PORTABLE_SETUP = ROOT / "dist" / "AnimeVault-Portable-Setup.exe"
 ICON = ROOT / "src" / "animevault" / "resources" / "media" / "app.ico"
 
 APP_NAME = "AnimeVault"
@@ -190,6 +194,30 @@ if __name__ == "__main__":
 LAUNCHER = LAUNCHER.replace("__APP_VERSION__", APP_VERSION)
 
 
+def build_application() -> Path:
+    """Run the canonical clean source build and return its fresh executable."""
+    if os.name != "nt":
+        raise SystemExit("The Windows application build must run on Windows.")
+    script = ROOT / "packaging" / "build_windows.ps1"
+    powershell = shutil.which("powershell.exe") or shutil.which("pwsh.exe")
+    if not script.is_file() or not powershell:
+        raise SystemExit("PowerShell and packaging/build_windows.ps1 are required.")
+    env = os.environ.copy()
+    env["ANIMEVAULT_PYTHON"] = sys.executable
+    started = time.time()
+    result = subprocess.run(
+        [powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script), "-SkipInstaller"],
+        cwd=str(ROOT),
+        env=env,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise SystemExit(f"Fresh application build failed with exit code {result.returncode}.")
+    if not APP_EXE.is_file() or APP_EXE.stat().st_mtime < started - 2:
+        raise SystemExit("The canonical build did not produce a fresh dist/AnimeVault.exe.")
+    return APP_EXE
+
+
 def build_uninstaller() -> Path:
     """Compile the standalone uninstaller and return its path.
 
@@ -229,63 +257,60 @@ def _install_uninstaller(install_dir: str) -> None:
 
 
 def build() -> int:
-    if not DIST.is_dir():
-        raise SystemExit(
-            "dist/AnimeVault not found.\n"
-            "Build the app first: see packaging/README.md"
-        )
     if not ICON.exists():
         raise SystemExit(f"Icon missing: {ICON}")
-    if not shutil.which("powershell"):
-        raise SystemExit("PowerShell is required to create shortcuts.")
+    if not shutil.which("powershell.exe") and not shutil.which("pwsh.exe"):
+        raise SystemExit("PowerShell is required to build the application.")
 
-    # 0. Build the standalone uninstaller so it can be bundled.
+    # Always compile the current source first; never consume dist/AnimeVault/.
+    app_exe = build_application()
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    stage = ROOT / "build" / f"portable-setup-{stamp}"
+    stage.mkdir(parents=True, exist_ok=False)
+
     uninstaller = build_uninstaller()
-    print(f"  uninstaller: {uninstaller} "
-          f"({uninstaller.stat().st_size / 1024:.0f} KB)")
+    print(f"  fresh app: {app_exe} ({app_exe.stat().st_size / 1024 / 1024:.1f} MB)")
+    print(f"  uninstaller: {uninstaller} ({uninstaller.stat().st_size / 1024:.0f} KB)")
 
-    # 1. Zip the frozen application + uninstaller.
-    payload = ROOT / "dist" / "payload.zip"
-    print("Zipping application files...")
+    payload = stage / "payload.zip"
+    print("Zipping freshly built application and uninstaller...")
     with zipfile.ZipFile(payload, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as z:
-        for item in DIST.rglob("*"):
-            if item.is_file():
-                z.write(item, Path("app") / item.relative_to(DIST))
-        # Include the uninstaller inside the payload so the launcher
-        # doesn't need to compile anything at install time.
+        z.write(app_exe, Path("app") / "AnimeVault.exe")
         z.write(uninstaller, Path("app") / "uninstall.exe")
     print(f"  payload: {payload.stat().st_size / 1024 / 1024:.1f} MB")
 
-    # 2. Build the small self-extracting stub around it.
-    stage = ROOT / "build" / "installer_stub"
-    stage.mkdir(parents=True, exist_ok=True)
     launcher = stage / "setup_launcher.py"
     launcher.write_text(LAUNCHER, encoding="utf-8")
-    shutil.copy(payload, stage / "payload.zip")
-
-    print("Building installer stub (this takes a minute)...")
+    stub_work = stage / "stub-work"
+    stub_spec = stage / "stub-spec"
+    stub_work.mkdir()
+    stub_spec.mkdir()
+    started = time.time()
+    print("Building the separate portable setup executable...")
     cmd = [
         sys.executable, "-m", "PyInstaller",
         "--noconfirm", "--clean", "--onefile", "--windowed",
-        "--name", "AnimeVault-Setup",
+        "--name", "AnimeVault-Portable-Setup",
+        "--distpath", str(ROOT / "dist"),
+        "--workpath", str(stub_work),
+        "--specpath", str(stub_spec),
         "--icon", str(ICON),
-        "--add-data", f"{stage / 'payload.zip'}{os.pathsep}.",
-        # The stub must stay small: it never imports the app's modules.
+        "--add-data", f"{payload}{os.pathsep}.",
         "--exclude-module", "PySide6",
         "--exclude-module", "animevault",
         str(launcher),
     ]
     rc = subprocess.call(cmd, cwd=str(ROOT))
     if rc != 0:
-        raise SystemExit("PyInstaller failed while building the installer stub.")
+        raise SystemExit("PyInstaller failed while building the portable setup stub.")
 
-    out = ROOT / "dist" / "AnimeVault-Setup.exe"
-    if not out.exists():
-        raise SystemExit("Installer was not produced.")
+    if not PORTABLE_SETUP.is_file() or PORTABLE_SETUP.stat().st_size < 1_000_000:
+        raise SystemExit(f"Portable installer was not regenerated: {PORTABLE_SETUP}")
+    if PORTABLE_SETUP.stat().st_mtime < started - 2:
+        raise SystemExit(f"Portable installer is older than this build: {PORTABLE_SETUP}")
 
-    payload.unlink(missing_ok=True)
-    size = out.stat().st_size / 1024 / 1024
-    print(f"\nInstaller ready: {out}  ({size:.1f} MB)")
+    size = PORTABLE_SETUP.stat().st_size / 1024 / 1024
+    print(f"\nPortable installer ready: {PORTABLE_SETUP} ({size:.1f} MB)")
     return 0
 
 

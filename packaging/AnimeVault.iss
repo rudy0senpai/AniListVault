@@ -15,10 +15,10 @@
 #define AppPublisher "rudy0senpai"
 #define AppExeName "AnimeVault.exe"
 #ifndef SourceDir
-  #define SourceDir "..\dist\AnimeVault"
+  #error "Run packaging/build_windows.ps1; direct builds may package stale output."
 #endif
 #ifndef OutputDir
-  #define OutputDir "..\dist"
+  #error "Run packaging/build_windows.ps1 to set the versioned output directory."
 #endif
 
 [Setup]
