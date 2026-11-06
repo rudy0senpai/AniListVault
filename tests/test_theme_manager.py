@@ -17,7 +17,6 @@ from animevault.ui.theme import (
     tier_color,
 )
 
-
 @pytest.fixture(scope="module")
 def app():
     return QApplication.instance() or QApplication([])
@@ -194,68 +193,8 @@ def test_invalid_theme_definition_falls_back_and_is_hidden_from_picker(manager):
         THEMES["dracula"] = original
 
 
-def test_update_source_is_validated_and_persisted(manager):
-    from animevault.ui.theme_dialog import ThemeSettingsDialog
-
-    dialog = ThemeSettingsDialog(manager=manager)
-    dialog.release_api_input.setText("https://example.com/releases/latest")
-    assert dialog._save_release_source() is False
-    dialog.release_api_input.setText(
-        "https://api.github.com/repos/sample-owner/sample-repo/releases/latest"
-    )
-    assert dialog._save_release_source() is True
-    assert dialog._settings.value("updates/release_api") == dialog.release_api_input.text()
-    dialog.close()
 
 
-def test_update_source_defaults_to_repository_and_empty_input_saves(manager):
-    from animevault.services.update import DEFAULT_RELEASE_API
-    from animevault.ui.theme_dialog import ThemeSettingsDialog
-
-    manager.settings.remove("updates/release_api")
-    manager.settings.sync()
-    dialog = ThemeSettingsDialog(manager=manager)
-    assert dialog.release_api_input.text() == DEFAULT_RELEASE_API
-    dialog.release_api_input.clear()
-    assert dialog._save_release_source() is True
-    assert dialog.release_api_input.text() == DEFAULT_RELEASE_API
-    assert dialog._settings.value("updates/release_api") == DEFAULT_RELEASE_API
-    dialog.close()
-
-
-def test_check_updates_button_uses_builtin_source_without_user_entry(manager, monkeypatch):
-    from animevault.services.update import DEFAULT_RELEASE_API
-    from animevault.ui.theme_dialog import ThemeSettingsDialog
-
-    manager.settings.remove("updates/release_api")
-    manager.settings.sync()
-    dialog = ThemeSettingsDialog(manager=manager)
-    dialog.release_api_input.clear()
-    started = []
-    monkeypatch.setattr(
-        dialog,
-        "_start_update_worker",
-        lambda mode, info=None: started.append((mode, info)),
-    )
-    dialog._check_for_updates()
-    assert started == [("check", None)]
-    assert dialog._settings.value("updates/release_api") == DEFAULT_RELEASE_API
-    assert dialog.release_api_input.text() == DEFAULT_RELEASE_API
-    dialog.close()
-
-
-def test_legacy_owner_repo_template_migrates_to_builtin_release_source(manager):
-    from animevault.services.update import DEFAULT_RELEASE_API
-    from animevault.ui.theme_dialog import ThemeSettingsDialog
-
-    manager.settings.setValue(
-        "updates/release_api",
-        "https://api.github.com/repos/OWNER/REPO/releases/latest",
-    )
-    manager.settings.sync()
-    dialog = ThemeSettingsDialog(manager=manager)
-    assert dialog.release_api_input.text() == DEFAULT_RELEASE_API
-    dialog.close()
 
 
 def test_reduce_effects_persists(manager):

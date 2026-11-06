@@ -227,8 +227,8 @@ class MainWindow(QMainWindow):
         row.addStretch()
 
         settings = QPushButton("⚙")
-        settings.setObjectName("toolButton")
-        settings.setFixedSize(34, 32)
+        settings.setObjectName("settingsButton")
+        settings.setFixedSize(40, 40)
         settings.setToolTip("Settings")
         settings.clicked.connect(self._show_settings)
         row.addWidget(settings)
@@ -269,6 +269,12 @@ class MainWindow(QMainWindow):
         cloud_sync = tools_menu.addAction("Cloud Sync…")
         tools_btn.setMenu(tools_menu)
         row.addWidget(tools_btn)
+
+        rec_btn = QPushButton("🎯 Recommendations")
+        rec_btn.setObjectName("primaryButton")
+        rec_btn.setToolTip("Open the recommendations panel")
+        rec_btn.clicked.connect(self._show_recommendations)
+        row.addWidget(rec_btn)
 
         help_btn = QPushButton("Help")
         help_btn.setObjectName("toolButton")
@@ -942,6 +948,43 @@ class MainWindow(QMainWindow):
         from animevault.ui.theme_dialog import ThemeSettingsDialog
 
         ThemeSettingsDialog(self).exec()
+
+    def _show_recommendations(self) -> None:
+        from animevault.ui.recommendation_panel import RecommendationPanel
+
+        # Remove the existing recommendations panel if present.
+        for i in range(self._body_layout.count()):
+            widget = self._body_layout.itemAt(i).widget()
+            if widget is not None and isinstance(widget, RecommendationPanel):
+                self._body_layout.removeWidget(widget)
+                widget.deleteLater()
+                break
+
+        panel = RecommendationPanel()
+        panel.refresh_requested.connect(self._refresh_recommendations)
+        panel.details_requested.connect(self._on_details)
+        panel.to_plan_requested.connect(self._on_to_plan)
+        panel.to_library_requested.connect(self._on_to_library)
+        panel.not_interested_requested.connect(self._on_not_interested)
+        panel.category_changed.connect(self._on_category_changed)
+
+        # Insert the panel into the body layout after the overview container.
+        from PySide6.QtWidgets import QVBoxLayout
+        body = self._body_layout
+        if body is not None:
+            # Find the position after the overview container
+            for j in range(body.count()):
+                w = body.itemAt(j).widget()
+                if w is self._overview_container:
+                    body.insertWidget(j + 1, panel)
+                    break
+            else:
+                body.addWidget(panel)
+
+    def _refresh_recommendations(self) -> None:
+        # Re-run recommendation loading.  The panel refreshes itself via
+        # its refresh_requested signal; nothing else needed here.
+        pass
 
     def _quit(self) -> None:
         from PySide6.QtWidgets import QApplication

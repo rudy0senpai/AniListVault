@@ -46,14 +46,14 @@ def _clean(value: Any) -> str:
 def _cell_xml(ref: str, value: Any, shared: dict[str, int]) -> str:
     if value is None or value == "":
         return ""
+    if isinstance(value, bool):  # bool is a subclass of int; check first
+        return f'<c r="{ref}" t="b"><v>{1 if value else 0}</v></c>'
     if isinstance(value, dt.datetime):
         serial = (value - dt.datetime(1899, 12, 30)).total_seconds() / 86400
         return f'<c r="{ref}" s="3"><v>{serial:.12g}</v></c>'
     if isinstance(value, dt.date):
         serial = (value - dt.date(1899, 12, 30)).days
         return f'<c r="{ref}" s="2"><v>{serial}</v></c>'
-    if isinstance(value, bool):
-        return f'<c r="{ref}" t="b"><v>{1 if value else 0}</v></c>'
     if isinstance(value, (int, float)):
         return f'<c r="{ref}"><v>{value}</v></c>'
     text = _clean(value)
@@ -101,7 +101,17 @@ def write_sheet(
     for i, row in enumerate(rows, start=2):
         sheet_rows.append(build_row(row, i))
 
-    widths = [min(36, max(12, len(str(header)) + 2)) for header in headers]
+    # Decide column widths from the widest of the header AND every data
+    # cell in that column, so long free-text columns (synopsis, notes)
+    # don't get crushed to one word but stay within a readable bound.
+    def column_width(header: str, column_values: Sequence[Any]) -> int:
+        max_len = len(_clean(str(header))) + 2
+        for value in column_values:
+            if value is not None:
+                max_len = max(max_len, len(_clean(str(value))) + 2)
+        return min(60, max(12, max_len))
+
+    widths = [column_width(h, [r[i] for r in rows]) for i, h in enumerate(headers)]
     cols_xml = "<cols>" + "".join(
         f'<col min="{index}" max="{index}" width="{width}" customWidth="1"/>'
         for index, width in enumerate(widths, start=1)

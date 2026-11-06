@@ -422,6 +422,30 @@ QPushButton#toolButton:hover {{
     color: {TEXT_PRIMARY};
     border: 1px solid {BORDER_HI};
 }}
+QPushButton#settingsButton {{
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    padding: 2px;
+    color: {TEXT_SECONDARY};
+    font-weight: 500;
+}}
+QPushButton#settingsButton:hover {{
+    background: {BG_PANEL_HI};
+    color: {TEXT_PRIMARY};
+    border: 1px solid {BORDER_HI};
+    border-radius: 8px;
+}}
+QPushButton#settingsButton:pressed {{
+    background: {BG_PANEL};
+    border: 1px solid {ACCENT};
+    border-radius: 8px;
+}}
+QPushButton#settingsButton:focus {{
+    border: 1px solid {ACCENT};
+    outline: none;
+    border-radius: 8px;
+}}
 QPushButton#dangerButton {{
     background: transparent;
     border: 1px solid transparent;

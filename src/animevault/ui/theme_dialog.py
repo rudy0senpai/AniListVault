@@ -29,42 +29,8 @@ from PySide6.QtWidgets import (
 )
 
 from animevault import __version__
-from animevault.services.update import (
-    DEFAULT_RELEASE_API,
-    LEGACY_RELEASE_API_TEMPLATE,
-    UpdateInfo,
-    check_for_updates,
-    download_installer,
-    launch_installer,
-    validate_release_api_url,
-)
+
 from animevault.ui.theme import THEMES, ThemeManager
-
-
-class _UpdateWorker(QThread):
-    """Keep network checks and installer downloads off the GUI thread."""
-
-    result = Signal(object, object)
-
-    def __init__(self, mode: str, info: UpdateInfo | None = None, release_api: str = "", parent=None):
-        super().__init__(parent)
-        self.mode = mode
-        self.info = info
-        self.release_api = release_api
-
-    def run(self) -> None:
-        try:
-            if self.mode == "check":
-                output = check_for_updates(__version__, release_api=self.release_api)
-            else:
-                if self.info is None:
-                    raise RuntimeError("No release is selected for download.")
-                output = download_installer(
-                    self.info, Path(tempfile.gettempdir()) / "AnimeVaultUpdate"
-                )
-            self.result.emit(output, None)
-        except Exception as exc:
-            self.result.emit(None, str(exc))
 
 
 class ThemeSettingsDialog(QDialog):
@@ -73,7 +39,6 @@ class ThemeSettingsDialog(QDialog):
     def __init__(self, parent=None, manager: ThemeManager | None = None):
         super().__init__(parent)
         self.manager = manager or ThemeManager.instance()
-        self._settings = QSettings("AnimeVault", "AnimeVault")
         self.setObjectName("appearanceSettingsDialog")
         self.setWindowTitle("Appearance & Theme")
         self.setSizeGripEnabled(True)
@@ -85,7 +50,7 @@ class ThemeSettingsDialog(QDialog):
 
         heading = QLabel("Appearance & Theme")
         heading.setObjectName("settingsTitle")
-        subtitle = QLabel("Choose a palette, preview it, and manage update preferences.")
+        subtitle = QLabel("Choose a palette, preview it, and manage your theme settings.")
         subtitle.setObjectName("settingsSubtitle")
         subtitle.setWordWrap(True)
         outer.addWidget(heading)
@@ -222,73 +187,12 @@ class ThemeSettingsDialog(QDialog):
         preview_layout.addWidget(self.reset_theme_button)
         self._picker_layout.addWidget(self.preview, 2)
 
-        self.update_group = QGroupBox("Software Updates")
-        self.update_group.setObjectName("updateGroup")
-        update_layout = QVBoxLayout(self.update_group)
-        update_layout.setContentsMargins(16, 24, 16, 16)
-        update_layout.setSpacing(12)
-
-        version_row = QHBoxLayout()
-        version_row.setSpacing(12)
-        self.installed_version = QLabel(f"Installed version · {__version__}")
-        self.installed_version.setObjectName("installedVersion")
-        self.installed_version.setWordWrap(True)
-        version_row.addWidget(self.installed_version, 1)
-        self.check_updates_button = QPushButton("Check for updates")
-        self.check_updates_button.setObjectName("settingsPrimary")
-        self.check_updates_button.setMinimumHeight(42)
-        self.check_updates_button.clicked.connect(self._check_for_updates)
-        version_row.addWidget(self.check_updates_button)
-        update_layout.addLayout(version_row)
-
-        source_label = QLabel("GitHub Releases API URL (optional override)")
-        source_label.setObjectName("settingsFieldLabel")
-        saved_release_api = str(
-            self._settings.value("updates/release_api", "") or ""
-        ).strip()
-        if saved_release_api.rstrip("/").casefold() == LEGACY_RELEASE_API_TEMPLATE.casefold():
-            saved_release_api = ""
-        self.release_api_input = QLineEdit(
-            saved_release_api or DEFAULT_RELEASE_API
-        )
-        self.release_api_input.setObjectName("releaseSourceInput")
-        self.release_api_input.setAccessibleName("GitHub Releases API URL")
-        self.release_api_input.setPlaceholderText(DEFAULT_RELEASE_API)
-        self.release_api_input.setClearButtonEnabled(True)
-        source_label.setBuddy(self.release_api_input)
-        source_row = QHBoxLayout()
-        source_row.setSpacing(10)
-        source_row.addWidget(self.release_api_input, 1)
-        self.save_release_source_button = QPushButton("Save source")
-        self.save_release_source_button.setObjectName("settingsSecondary")
-        self.save_release_source_button.setMinimumHeight(42)
-        self.save_release_source_button.clicked.connect(self._save_release_source)
-        source_row.addWidget(self.save_release_source_button)
-        update_layout.addWidget(source_label)
-        update_layout.addLayout(source_row)
-
-        self.update_status = QLabel()
-        self.update_status.setObjectName("updatesStatus")
-        self.update_status.setWordWrap(True)
-        self.update_status.setMinimumWidth(0)
-        update_layout.addWidget(self.update_status)
-        if saved_release_api:
-            self.update_status.setText("Release source is saved.")
-        else:
-            self.update_status.setText(
-                "Using AniListVault releases by default. For private access, sign in "
-                "once with GitHub CLI (`gh auth login`) using an account with repo access."
-            )
-        content_layout.addWidget(self.update_group)
-
         footer = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         footer.button(QDialogButtonBox.StandardButton.Close).setObjectName("settingsSecondary")
         footer.button(QDialogButtonBox.StandardButton.Close).setMinimumHeight(40)
         footer.rejected.connect(self.reject)
         outer.addWidget(footer)
 
-        self._update_worker: _UpdateWorker | None = None
-        self._pending_update: UpdateInfo | None = None
         self.list.currentItemChanged.connect(self._selection_changed)
         self.search.textChanged.connect(self._filter)
         self.reduce_effects.toggled.connect(self.manager.set_reduce_effects)
@@ -409,94 +313,3 @@ class ThemeSettingsDialog(QDialog):
             )
             group.setHidden(not has_visible_items)
 
-    def _save_release_source(self) -> bool:
-        try:
-            source = validate_release_api_url(
-                self.release_api_input.text().strip() or DEFAULT_RELEASE_API
-            )
-        except Exception as exc:
-            self.update_status.setText(f"Invalid release source: {exc}")
-            return False
-        self.release_api_input.setText(source)
-        self._settings.setValue("updates/release_api", source)
-        self._settings.sync()
-        self.update_status.setText("Release source saved. Select Check for updates to query it.")
-        return True
-
-    def _check_for_updates(self) -> None:
-        if self._update_worker is not None and self._update_worker.isRunning():
-            return
-        if not self._save_release_source():
-            return
-        self.check_updates_button.setEnabled(False)
-        self.update_status.setText("Checking GitHub releases…")
-        self._start_update_worker("check")
-
-    def _start_update_worker(self, mode: str, info: UpdateInfo | None = None) -> None:
-        endpoint = str(self._settings.value("updates/release_api", ""))
-        worker = _UpdateWorker(mode, info, endpoint, self)
-        self._update_worker = worker
-        worker.result.connect(self._update_finished)
-        worker.start()
-
-    def _update_finished(self, result, error) -> None:
-        worker = self._update_worker
-        mode = worker.mode if worker is not None else "check"
-        self.check_updates_button.setEnabled(True)
-        if error:
-            self.update_status.setText(f"Update failed: {error}")
-            self._pending_update = None
-            return
-
-        if mode == "check":
-            if result is None:
-                self.update_status.setText("No newer stable release found.")
-                return
-            info: UpdateInfo = result
-            self._pending_update = info
-            if not info.installer_url or not info.sha256:
-                self.update_status.setText(
-                    f'Version {info.version} is available, but has no digest-verified installer. '
-                    f'<a href="{info.page_url}">View release</a>.'
-                )
-                self.update_status.setTextFormat(Qt.TextFormat.RichText)
-                self.update_status.setOpenExternalLinks(True)
-                return
-            notes = info.notes.strip()[:1600] or "Release notes were not provided."
-            choice = QMessageBox.question(
-                self,
-                "AnimeVault update available",
-                f"Install AnimeVault {info.version}?\n\n{notes}\n\n"
-                "The setup file will be downloaded over HTTPS and checked against its SHA-256 digest.",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
-            )
-            if choice == QMessageBox.StandardButton.Yes:
-                self.check_updates_button.setEnabled(False)
-                self.update_status.setText(f"Downloading and verifying version {info.version}…")
-                self._start_update_worker("download", info)
-            else:
-                self.update_status.setText(f"Update {info.version} is available.")
-            return
-
-        info = self._pending_update
-        if info is None or not info.sha256:
-            self.update_status.setText("Update metadata is no longer available; check again.")
-            return
-        try:
-            launch_installer(result, info.sha256)
-        except Exception as exc:
-            self.update_status.setText(f"Verified download could not be launched: {exc}")
-            return
-        self.update_status.setText(
-            f"Version {info.version} setup launched. Follow its prompts to finish the update."
-        )
-        self._pending_update = None
-
-    def closeEvent(self, event) -> None:  # noqa: N802
-        worker = self._update_worker
-        if worker is not None and worker.isRunning():
-            self.update_status.setText("Please wait for the update operation to finish.")
-            event.ignore()
-            return
-        super().closeEvent(event)
