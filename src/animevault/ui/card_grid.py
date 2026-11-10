@@ -22,6 +22,12 @@ class CardGrid(QScrollArea):
     """A scrollable, self-reflowing grid of cards."""
 
     card_clicked = Signal(object)
+    # Signals that proxy card events to the parent panel.
+    details_requested = Signal(int)
+    to_plan_requested = Signal(int)
+    to_library_requested = Signal(int)
+    not_interested_requested = Signal(int)
+    refresh_requested = Signal()
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)

@@ -964,9 +964,10 @@ class MainWindow(QMainWindow):
         panel = RecommendationPanel()
         panel.refresh_requested.connect(self._refresh_recommendations)
         panel.details_requested.connect(self._on_details)
-        panel.to_plan_requested.connect(self._on_to_plan)
-        panel.to_library_requested.connect(self._on_to_library)
-        panel.not_interested_requested.connect(self._on_not_interested)
+        # Note: to_plan_requested, to_library_requested, and
+        # not_interested_requested are handled internally by the
+        # RecommendationPanel (_on_to_plan, _on_to_library,
+        # _on_not_interested) and do not need MainWindow connections.
         panel.category_changed.connect(self._on_category_changed)
 
         # Insert the panel into the body layout after the overview container.

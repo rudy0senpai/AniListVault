@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QVBoxLayout,
     QWidget,
+    QSlider,
 )
 
 # The recommendation card component.
@@ -118,8 +119,9 @@ class RecommendationPanel(QFrame):
         self._format_combo = self._build_format_combo()
         filter_layout.addWidget(self._format_combo)
 
-        self._min_score_slider = self._build_min_score_slider()
-        filter_layout.addWidget(self._min_score_slider)
+        self._min_score_slider_container = self._build_min_score_slider()
+        filter_layout.addWidget(self._min_score_slider_container)
+        self._min_score_slider = self._min_score_slider_container.findChild(QSlider)
 
         filter_layout.addStretch(1)
 
@@ -188,7 +190,7 @@ class RecommendationPanel(QFrame):
         return combo
 
     def _build_min_score_slider(self):
-        from PySide6.QtWidgets import QSlider, QLabel
+        from PySide6.QtWidgets import QSlider, QLabel, QWidget, QHBoxLayout
         slider = QSlider(Qt.Orientation.Horizontal)
         slider.setObjectName("minScoreSlider")
         slider.setRange(0, 100)
@@ -197,10 +199,12 @@ class RecommendationPanel(QFrame):
         self._min_score_label = QLabel("0%")
         self._min_score_label.setObjectName("minScoreLabel")
         self._min_score_label.setFixedWidth(30)
-        h = QHBoxLayout()
+        container = QWidget()
+        h = QHBoxLayout(container)
+        h.setContentsMargins(0, 0, 0, 0)
         h.addWidget(self._min_score_label)
         h.addWidget(slider)
-        return h
+        return container
 
     # ── Loading & rendering ─────────────────────────────────────────
 
