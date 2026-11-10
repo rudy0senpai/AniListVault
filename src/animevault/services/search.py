@@ -22,6 +22,8 @@ def calculate_match_score(query: str, candidate: AnimeMetadata) -> float:
     """Calculate match relevance score (higher is better).
 
     Considers exact match, word prefix, and string similarity.
+    Includes all available title representations: English, Japanese, Korean,
+    Chinese, Manhwa, Manhua, and alternative titles.
     """
     q = query.strip().lower()
     titles = [
@@ -29,6 +31,10 @@ def calculate_match_score(query: str, candidate: AnimeMetadata) -> float:
         candidate.title_en,
         candidate.title_romaji,
         candidate.title_ja,
+        candidate.title_ko,
+        candidate.title_zh,
+        candidate.title_manhwa,
+        candidate.title_manhua,
     ] + candidate.synonyms
     titles = [t.strip().lower() for t in titles if t and t.strip()]
 
@@ -156,8 +162,19 @@ class SearchService:
         if match:
             return match
 
-        # 2. By title
-        for t in [meta.title, meta.title_en, meta.title_romaji, meta.title_ja]:
+        # 2. By title - include all available title representations
+        # (English, Japanese, Korean, Chinese, Manhwa, Manhua, etc.)
+        title_fields = [
+            meta.title,
+            meta.title_en,
+            meta.title_romaji,
+            meta.title_ja,
+            meta.title_ko,
+            meta.title_zh,
+            meta.title_manhwa,
+            meta.title_manhua,
+        ]
+        for t in title_fields:
             if t and t.strip():
                 match = Anime.find_by_title(t)
                 if match:

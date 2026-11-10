@@ -117,6 +117,7 @@ class MainWindow(QMainWindow):
         body = QHBoxLayout()
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(0)
+        self._body = body
 
         self._grid = CardGrid()
         body.addWidget(self._grid, 1)
@@ -953,10 +954,10 @@ class MainWindow(QMainWindow):
         from animevault.ui.recommendation_panel import RecommendationPanel
 
         # Remove the existing recommendations panel if present.
-        for i in range(self._body_layout.count()):
-            widget = self._body_layout.itemAt(i).widget()
+        for i in range(self._body.count()):
+            widget = self._body.itemAt(i).widget()
             if widget is not None and isinstance(widget, RecommendationPanel):
-                self._body_layout.removeWidget(widget)
+                self._body.removeWidget(widget)
                 widget.deleteLater()
                 break
 
@@ -969,8 +970,7 @@ class MainWindow(QMainWindow):
         panel.category_changed.connect(self._on_category_changed)
 
         # Insert the panel into the body layout after the overview container.
-        from PySide6.QtWidgets import QVBoxLayout
-        body = self._body_layout
+        body = self._body
         if body is not None:
             # Find the position after the overview container
             for j in range(body.count()):

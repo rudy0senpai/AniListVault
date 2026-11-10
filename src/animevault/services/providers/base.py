@@ -87,6 +87,12 @@ class AnimeMetadata:
     # ── Media ─────────────────────────────────────────────────────
     poster_url: str = ""
 
+    # ── Multi-language titles (for enhanced matching) ──────────────
+    title_ko: str = ""         # Korean title
+    title_zh: str = ""         # Chinese (Simplified + Traditional)
+    title_manhwa: str = ""     # Korean manhwa title
+    title_manhua: str = ""     # Chinese manhua title
+
     # ── Source ────────────────────────────────────────────────────
     source_provider: str = ""
 
