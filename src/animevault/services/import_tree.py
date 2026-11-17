@@ -14,7 +14,7 @@ import re
 import unicodedata
 import uuid
 from dataclasses import dataclass, field
-from enum import StrEnum
+from enum import Enum
 from pathlib import Path
 from typing import Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -29,7 +29,7 @@ from animevault.media_types import (
 )
 
 
-class NodeState(StrEnum):
+class NodeState(str, Enum):
     PENDING = "pending"
     RUNNING = "running"
     COMPLETED = "completed"

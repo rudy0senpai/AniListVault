@@ -38,6 +38,45 @@ def isolated_database(tmp_path: Path, monkeypatch):
     db_mod._disconnect_cached()
 
 
+@pytest.fixture(autouse=True)
+def reset_theme_manager():
+    """Reset ThemeManager singleton to default state for each test."""
+    from animevault.ui.theme import ThemeManager, _activate_tokens, THEMES, DEFAULT_THEME_ID
+    from animevault.ui import theme as theme_tokens
+
+    # Reset singleton
+    ThemeManager._instance = None
+
+    # Reset global theme tokens to default
+    default_theme = THEMES[DEFAULT_THEME_ID]
+    _activate_tokens(default_theme)
+    theme_tokens._REDUCE_EFFECTS = False
+
+    # Re-export the updated tokens to the module
+    import animevault.ui.theme as theme_module
+    theme_module.BG_DEEP = default_theme.background
+    theme_module.BG_PANEL = default_theme.panel
+    theme_module.BG_PANEL_HI = default_theme.panel_hover
+    theme_module.BG_INPUT = default_theme.input
+    theme_module.BORDER = default_theme.border
+    theme_module.BORDER_HI = default_theme.border_hover
+    theme_module.ACCENT = default_theme.accent
+    theme_module.ACCENT_DIM = default_theme.accent_dim
+    theme_module.ACCENT_DEEP = default_theme.accent_deep
+    theme_module.TEXT_PRIMARY = default_theme.text
+    theme_module.TEXT_SECONDARY = default_theme.text_secondary
+    theme_module.TEXT_MUTED = default_theme.text_muted
+    theme_module.TEXT_ON_ACCENT = default_theme.text_on_accent
+    theme_module.DANGER = default_theme.danger
+    theme_module.SUCCESS = default_theme.success
+    theme_module.WARNING = default_theme.warning
+
+    yield
+
+    # Clean up singleton after test
+    ThemeManager._instance = None
+
+
 @pytest.fixture
 def db_conn(isolated_database: Path) -> sqlite3.Connection:
     """Direct connection to the test database for assertions."""
