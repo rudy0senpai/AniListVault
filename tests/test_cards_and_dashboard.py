@@ -4,7 +4,7 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtWidgets import QApplication, QLabel  # noqa: E402
+from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QComboBox  # noqa: E402
 
 from animevault.media_types import (  # noqa: E402
     MEDIA_ANIME,
@@ -27,6 +27,7 @@ from animevault.ui.theme import (  # noqa: E402
     tier_badge_style,
     tier_color,
 )
+from animevault.ui.dashboard_panel import _KPICard  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -378,3 +379,95 @@ class TestSidebarFitsItsPanel:
         empty._sync_fill()
         assert all(c.isHidden() or c.width() == 0
                    for c in empty.children() if c.isWidgetType())
+
+
+class TestDashboardNavigation:
+    def test_dashboard_panel_has_back_button(self, qt_app):
+        from animevault.ui.dashboard_panel import DashboardPanel
+        panel = DashboardPanel()
+        back_btn = panel.findChild(QPushButton, "backButton")
+        assert back_btn is not None, "dashboard must have a back button"
+        assert back_btn.text().strip() == "← Back to Library"
+
+    def test_back_requested_signal_emitted(self, qt_app):
+        from animevault.ui.dashboard_panel import DashboardPanel
+        panel = DashboardPanel()
+        emitted = []
+        panel.back_requested.connect(lambda: emitted.append(True))
+        panel._back_btn.click()
+        assert len(emitted) == 1
+
+    def test_refresh_requested_signal_emitted(self, qt_app):
+        from animevault.ui.dashboard_panel import DashboardPanel
+        panel = DashboardPanel()
+        emitted = []
+        panel.refresh_requested.connect(lambda: emitted.append(True))
+        panel._refresh_btn.click()
+        assert len(emitted) == 1
+
+    def test_refresh_populates_kpi_cards(self, qt_app, migrated_database):
+        from animevault.ui.dashboard_panel import DashboardPanel
+        from animevault.models.anime import Anime
+        from animevault.models.literature import Literature
+        Anime.create(title="A1", tier="SSS", genres=["Action"])
+        Literature.create(title="L1", category=MEDIA_MANHUA, tier="S")
+        panel = DashboardPanel()
+        panel.refresh(Anime.all(), Literature.all())
+        qt_app.processEvents()
+        kpis = panel.findChildren(_KPICard)
+        assert len(kpis) >= 6, "must have at least 6 KPI cards"
+
+
+class TestLiquidGlass:
+    def test_theme_manager_liquid_glass_default_off(self, reset_theme_manager):
+        from animevault.ui.theme import ThemeManager
+        manager = ThemeManager.instance()
+        assert manager.liquid_glass is False
+
+    def test_theme_manager_set_liquid_glass(self, reset_theme_manager):
+        from animevault.ui.theme import ThemeManager
+        manager = ThemeManager.instance()
+        manager.set_liquid_glass(True)
+        assert manager.liquid_glass is True
+        manager.set_liquid_glass(False)
+        assert manager.liquid_glass is False
+
+    def test_liquid_glass_persisted_in_settings(self, reset_theme_manager):
+        from animevault.ui.theme import ThemeManager
+        manager = ThemeManager.instance()
+        manager.set_liquid_glass(True)
+        # Read directly from QSettings
+        val = manager.settings.value("appearance/liquid_glass", False, type=bool)
+        assert val is True
+
+    def test_liquid_glass_changed_signal(self, reset_theme_manager):
+        from animevault.ui.theme import ThemeManager
+        manager = ThemeManager.instance()
+        emitted = []
+        manager.liquid_glass_changed.connect(lambda v: emitted.append(v))
+        manager.set_liquid_glass(True)
+        assert emitted == [True]
+
+    def test_theme_dialog_has_effects_combo(self, qt_app, reset_theme_manager):
+        from animevault.ui.theme_dialog import ThemeSettingsDialog
+        from animevault.ui.theme import ThemeManager
+        manager = ThemeManager.instance()
+        dialog = ThemeSettingsDialog(manager=manager)
+        combo = dialog.findChild(QComboBox)
+        assert combo is not None, "theme dialog must have a QComboBox for effects"
+        assert combo.count() == 2
+        assert combo.itemText(0) == "Standard"
+        assert combo.itemText(1) == "3D Liquid Glass"
+
+    def test_theme_dialog_combo_reflects_state(self, qt_app, reset_theme_manager):
+        from animevault.ui.theme_dialog import ThemeSettingsDialog
+        from animevault.ui.theme import ThemeManager
+        manager = ThemeManager.instance()
+        manager.set_liquid_glass(True)
+        dialog = ThemeSettingsDialog(manager=manager)
+        combo = dialog.findChild(QComboBox)
+        assert combo.currentIndex() == 1
+
+    def test_build_stylesheet_contains_liquid_glass(self):
+        css = build_stylesheet()
+        assert "liquid-glass" in css.lower() or "liquid_glass" in css.lower()
