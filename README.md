@@ -14,7 +14,7 @@
 | --- | --- |
 | <img src="docs/screenshots/theme-anime-neon.png" width="320" alt="AnimeVault anime library in the Anime Neon theme"> | <img src="docs/screenshots/theme-light.png" width="320" alt="AnimeVault anime library in a light theme"> |
 
-The screenshots below show the Appearance & Theme dialog and additional library palettes.
+The screenshots below show the Appearance & Theme dialogue and additional library palettes.
 
 ### Theme gallery
 
