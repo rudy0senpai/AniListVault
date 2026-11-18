@@ -5,6 +5,8 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+from PySide6.QtCore import QSettings
+
 import pytest
 
 from animevault.database import database_path, initialize_database, set_database_path
@@ -43,6 +45,10 @@ def reset_theme_manager():
     """Reset ThemeManager singleton to default state for each test."""
     from animevault.ui.theme import ThemeManager, _activate_tokens, THEMES, DEFAULT_THEME_ID
     from animevault.ui import theme as theme_tokens
+
+    # Reset QSettings for liquid_glass so tests start from a known state
+    settings = QSettings("AnimeVault", "AnimeVault")
+    settings.remove("appearance/liquid_glass")
 
     # Reset singleton
     ThemeManager._instance = None

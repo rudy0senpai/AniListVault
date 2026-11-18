@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressDialog,
     QPushButton,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -88,6 +89,8 @@ class MainWindow(QMainWindow):
         manager = ThemeManager.instance()
         manager.theme_changed.connect(self._on_theme_changed)
         manager.effects_changed.connect(self._on_effects_changed)
+        manager.liquid_glass_changed.connect(self._on_liquid_glass_changed)
+        manager.liquid_glass_changed.connect(self._on_liquid_glass_changed)
         self._background.set_effects_reduced(
             manager.reduce_effects or manager.theme_id == "minimal-simple"
         )
@@ -113,8 +116,13 @@ class MainWindow(QMainWindow):
         outer.addWidget(self._build_toolbar())
         outer.addWidget(self._build_search_row())
 
-        # Body: grid + sidebar
-        body = QHBoxLayout()
+        # Body: stacked pages (Library / Dashboard)
+        self._stack = QStackedWidget()
+        self._stack.setObjectName("mainStack")
+
+        # Library page: grid + overview
+        library_page = QWidget()
+        body = QHBoxLayout(library_page)
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(0)
         self._body = body
@@ -148,7 +156,17 @@ class MainWindow(QMainWindow):
         overview_layout.addWidget(self._overview, 1)
         body.addWidget(self._overview_container)
 
-        outer.addLayout(body, 1)
+        self._stack.addWidget(library_page)  # page 0
+
+        # Dashboard page
+        from animevault.ui.dashboard_panel import DashboardPanel
+
+        self._dashboard = DashboardPanel()
+        self._dashboard.refresh_requested.connect(self._refresh_dashboard)
+        self._dashboard.back_requested.connect(self._show_library)
+        self._stack.addWidget(self._dashboard)  # page 1
+
+        outer.addWidget(self._stack, 1)
 
         # Keep the background sized to the window, and behind the content.
         self._background.lower()
@@ -264,6 +282,7 @@ class MainWindow(QMainWindow):
         tools_btn = QPushButton("Tools")
         tools_btn.setObjectName("toolButton")
         tools_menu = QMenu(tools_btn)
+        dashboard_action = tools_menu.addAction("Library Dashboard")
         fetch_missing = tools_menu.addAction("Fetch Missing Data")
         refresh_all = tools_menu.addAction("Refresh Anime Data")
         tools_menu.addSeparator()
@@ -351,6 +370,7 @@ class MainWindow(QMainWindow):
         refresh_all.triggered.connect(lambda: self._on_bulk_enrich(True))
         cloud_sync.triggered.connect(self._on_cloud_sync)
         about.triggered.connect(self._show_about)
+        dashboard_action.triggered.connect(self._show_dashboard)
 
         return toolbar
 
@@ -599,6 +619,10 @@ class MainWindow(QMainWindow):
         self._apply_cards(cards)
 
         self._overview.refresh(animes, literature)
+
+        # Also refresh the dashboard if it has been shown
+        if hasattr(self, '_dashboard') and self._dashboard is not None:
+            self._dashboard.refresh(animes, literature)
 
     # ── Actions ────────────────────────────────────────────────────
 
@@ -926,6 +950,7 @@ class MainWindow(QMainWindow):
         self._background.set_effects_reduced(
             manager.reduce_effects or theme_id == "minimal-simple"
         )
+        self._set_liquid_glass(manager.liquid_glass)
         selected_ids = {
             card.item.id for card in self._grid.cards if card.is_selected()
         }
@@ -944,6 +969,34 @@ class MainWindow(QMainWindow):
         self._background.set_effects_reduced(
             reduced or manager.theme_id == "minimal-simple"
         )
+        self._set_liquid_glass(manager.liquid_glass)
+
+    def _set_liquid_glass(self, enabled: bool) -> None:
+        if enabled:
+            self.centralWidget().setProperty("class", "liquid-glass-enabled")
+        else:
+            self.centralWidget().setProperty("class", "")
+        self.centralWidget().style().unpolish(self.centralWidget())
+        self.centralWidget().style().polish(self.centralWidget())
+
+    def _on_liquid_glass_changed(self, enabled: bool) -> None:
+        self._set_liquid_glass(enabled)
+
+    def _show_dashboard(self) -> None:
+        """Show the Library Dashboard page (page 1)."""
+        self._stack.setCurrentIndex(1)
+
+    def _show_library(self) -> None:
+        """Return to the Library page (page 0) and refresh."""
+        self._stack.setCurrentIndex(0)
+        self.refresh()
+
+    def _refresh_dashboard(self) -> None:
+        """Refresh the dashboard with current library data."""
+        if self._dashboard is not None:
+            from animevault.models.anime import Anime
+            from animevault.models.literature import Literature
+            self._dashboard.refresh(Anime.all(), Literature.all())
 
     def _show_settings(self) -> None:
         from animevault.ui.theme_dialog import ThemeSettingsDialog

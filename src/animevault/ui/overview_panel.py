@@ -480,6 +480,7 @@ class OverviewPanel(QFrame):
         # Connect to theme changes
         ThemeManager.instance().theme_changed.connect(self._on_theme_changed)
         ThemeManager.instance().effects_changed.connect(self._on_effects_changed)
+        ThemeManager.instance().liquid_glass_changed.connect(self._on_liquid_glass_changed)
 
     def _build_header(self, root: QVBoxLayout) -> None:
         header = QWidget()
@@ -587,6 +588,9 @@ class OverviewPanel(QFrame):
         self.apply_theme()
 
     def _on_effects_changed(self, enabled: bool) -> None:
+        self._refresh_styles()
+
+    def _on_liquid_glass_changed(self, enabled: bool) -> None:
         self._refresh_styles()
 
     def _refresh_styles(self) -> None:

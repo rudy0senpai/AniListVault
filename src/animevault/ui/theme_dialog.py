@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QVBoxLayout,
     QWidget,
+    QComboBox,
 )
 
 from animevault import __version__
@@ -178,6 +179,16 @@ class ThemeSettingsDialog(QDialog):
         self.reduce_effects.setChecked(self.manager.reduce_effects)
         self.reduce_effects.setMinimumHeight(42)
         preview_layout.addWidget(self.reduce_effects)
+
+        # 3D Liquid Glass appearance mode
+        self.liquid_glass_combo = QComboBox()
+        self.liquid_glass_combo.setObjectName("effectsCombo")
+        self.liquid_glass_combo.addItems(["Standard", "3D Liquid Glass"])
+        self.liquid_glass_combo.setCurrentIndex(0 if not self.manager.liquid_glass else 1)
+        self.liquid_glass_combo.setMinimumHeight(42)
+        preview_layout.addWidget(self.liquid_glass_combo)
+        self.liquid_glass_combo.currentIndexChanged.connect(self._on_liquid_glass_changed)
+
         self.reset_theme_button = QPushButton("Reset to Default")
         self.reset_theme_button.setObjectName("settingsSecondary")
         self.reset_theme_button.setMinimumHeight(42)
@@ -196,8 +207,11 @@ class ThemeSettingsDialog(QDialog):
         self.list.currentItemChanged.connect(self._selection_changed)
         self.search.textChanged.connect(self._filter)
         self.reduce_effects.toggled.connect(self.manager.set_reduce_effects)
+        self.liquid_glass_combo.currentIndexChanged.connect(self._on_liquid_glass_changed)
         self.manager.theme_changed.connect(self._sync_selected)
+        self.manager.liquid_glass_changed.connect(self._sync_liquid_glass)
         self._sync_selected(self.manager.theme_id)
+        self._sync_liquid_glass()
 
     def _available_geometry(self):
         screen = self.screen()
@@ -296,6 +310,21 @@ class ThemeSettingsDialog(QDialog):
             f"background: {theme.accent_dim}; color: {theme.text_on_accent}; "
             "border-radius: 7px; padding: 4px 9px; font-weight: 600;"
         )
+
+    def _sync_liquid_glass(self, enabled: bool = None) -> None:
+        """Sync the Liquid Glass combo box with the manager state."""
+        if enabled is None:
+            enabled = self.manager.liquid_glass
+        index = 1 if enabled else 0
+        if self.liquid_glass_combo.currentIndex() != index:
+            self.liquid_glass_combo.setCurrentIndex(index)
+
+    def _on_liquid_glass_changed(self, index: int) -> None:
+        """Handle 3D Liquid Glass mode selection."""
+        enabled = index == 1
+        self.manager.set_liquid_glass(enabled)
+        # Sync the combo box
+        self.liquid_glass_combo.setCurrentIndex(1 if enabled else 0)
 
     def _filter(self, query: str) -> None:
         query = query.casefold().strip()

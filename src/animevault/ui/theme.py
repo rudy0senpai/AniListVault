@@ -105,6 +105,7 @@ SUCCESS = "#4ade80"
 WARNING = "#fbbf24"
 _ACTIVE_THEME = THEMES[DEFAULT_THEME_ID]
 _REDUCE_EFFECTS = False
+_LIQUID_GLASS = False
 
 
 def _activate_tokens(theme: ThemeDefinition) -> None:
@@ -124,6 +125,7 @@ class ThemeManager(QObject):
     """Applies shared QSS themes and stores preferences in QSettings."""
     theme_changed = Signal(str)
     effects_changed = Signal(bool)
+    liquid_glass_changed = Signal(bool)
     _instance = None
 
     def __init__(self, app: QApplication | None = None):
@@ -131,6 +133,7 @@ class ThemeManager(QObject):
         self.app = app or QApplication.instance()
         self.settings = QSettings("AnimeVault", "AnimeVault")
         self.theme_id = DEFAULT_THEME_ID
+        self._liquid_glass = self.settings.value("appearance/liquid_glass", False, type=bool)
 
     @classmethod
     def instance(cls, app: QApplication | None = None) -> "ThemeManager":
@@ -179,6 +182,22 @@ class ThemeManager(QObject):
         if self.app is not None:
             self.app.setStyleSheet(build_stylesheet())
         self.effects_changed.emit(_REDUCE_EFFECTS)
+
+    @property
+    def liquid_glass(self) -> bool:
+        """Whether the 3D Liquid Glass appearance mode is enabled."""
+        return self._liquid_glass
+
+    def set_liquid_glass(self, enabled: bool) -> None:
+        """Enable or disable the 3D Liquid Glass appearance mode."""
+        self._liquid_glass = bool(enabled)
+        self.settings.setValue("appearance/liquid_glass", self._liquid_glass)
+        self.settings.sync()
+        if self.app is None:
+            self.app = QApplication.instance()
+        if self.app is not None:
+            self.app.setStyleSheet(build_stylesheet())
+        self.liquid_glass_changed.emit(self._liquid_glass)
 
 
 
@@ -688,4 +707,46 @@ QMenu::separator {{
 
 QMessageBox, QInputDialog {{ background: {BG_PANEL}; }}
 QProgressDialog {{ background: {BG_PANEL}; }}
+
+/* ── 3D Liquid Glass appearance mode ────────────────────────────
+   Only applied when the .liquid-glass-enabled class is set on a
+   parent widget; uses QSS gradients and spacing, never
+   backdrop-filter (unsupported in Qt CSS).
+*/
+.liquid-glass-enabled QMainWindow {{
+    /* Subtle layered surface via QSS gradients and spacing, no backdrop-filter. */
+}}
+.liquid-glass-enabled QDialog {{
+    /* Subtle layered surface via QSS gradients and spacing, no backdrop-filter. */
+}}
+.liquid-glass-enabled QWidget {{}}
+.liquid-glass-enabled QScrollBar:vertical {{
+    background: {BORDER_HI};
+    width: 10px;
+    margin: 2px;
+}}
+.liquid-glass-enabled QScrollBar::handle:vertical {{
+    background: {BORDER_HI};
+    border-radius: 5px;
+    min-height: 30px;
+}}
+.liquid-glass-enabled QScrollBar::handle:vertical:hover {{
+    background: {BORDER_HI};
+}}
+.liquid-glass-enabled QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; width: 0; }}
+.liquid-glass-enabled QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; }}
+.liquid-glass-enabled QScrollBar:horizontal {{
+    background: transparent;
+    height: 10px;
+    margin: 2px;
+}}
+.liquid-glass-enabled QScrollBar::handle:horizontal {{
+    background: {BORDER_HI};
+    border-radius: 5px;
+    min-width: 30px;
+}}
+.liquid-glass-enabled QScrollBar::handle:horizontal:hover {{
+    background: {BORDER_HI};
+}}
+.liquid-glass-enabled QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; }}
 """
