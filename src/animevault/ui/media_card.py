@@ -19,10 +19,19 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PySide6.QtCore import QPoint, QRect, QSize, Qt, Signal
+from PySide6.QtCore import (
+    QEasingCurve,
+    QPoint,
+    QRect,
+    QSize,
+    Qt,
+    QPropertyAnimation,
+    Signal,
+)
 from PySide6.QtGui import QAction, QColor, QFont, QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import (
     QFrame,
+    QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
     QMenu,
@@ -34,10 +43,9 @@ from PySide6.QtWidgets import (
 
 from animevault.ui import theme as theme_tokens
 from animevault.ui.theme import (
-    BG_SURFACE,
-    BORDER,
     BORDER_GLASS,
-    STATUS_COLORS,
+    GLASS_SURFACE,
+    GLASS_SURFACE_HOVER,
     tier_badge_style,
     tier_color,
     status_badge_style,
@@ -135,7 +143,16 @@ class MediaCard(QFrame):
         self.setObjectName("mediaCard")
         self.setFrameShape(QFrame.Shape.NoFrame)
         self._selected = False
+        self._hovered = False
         self.setProperty("selected", False)
+        self._shadow_effect = QGraphicsDropShadowEffect(self)
+        self._shadow_effect.setBlurRadius(8)
+        self._shadow_effect.setOffset(0, 2)
+        self._shadow_effect.setEnabled(False)
+        self.setGraphicsEffect(self._shadow_effect)
+        self._shadow_animation = QPropertyAnimation(self._shadow_effect, b"blurRadius", self)
+        self._shadow_animation.setDuration(180)
+        self._shadow_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
         self._build(
             title=title,
             type_label=type_label,
@@ -252,7 +269,7 @@ class MediaCard(QFrame):
         self._check.setVisible(False)
         self._check.setStyleSheet(
             f"color:{theme_tokens.ACCENT}; font-size:15px; "
-            f"font-weight:700; letter-spacing:1px;"
+            f"font-weight:700;"
         )
         self._check.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._check.setFixedSize(22, 22)
@@ -288,22 +305,42 @@ class MediaCard(QFrame):
         self._poster.set_art(poster_path)
 
     def _update_surface(self) -> None:
-        """Apply translucent glass surface + selection state styling."""
-        if self._selected:
-            style = (
-                f"background:{BG_SURFACE}; border:2px solid {theme_tokens.ACCENT}; "
-                f"border-radius:14px; box-shadow:"
-                f"0 4px 14px rgba(45,212,191,0.18), "
-                f"inset 0 1px 0 rgba(255,255,255,0.08);"
-            )
+        """Apply a translucent glass surface, selection state, and soft hover depth."""
+        border_color = (
+            theme_tokens.ACCENT if self._selected
+            else theme_tokens.ACCENT_DIM if self._hovered
+            else BORDER_GLASS
+        )
+        border_width = 2 if self._selected else 1
+        surface = GLASS_SURFACE_HOVER if self._selected else GLASS_SURFACE
+        self.setStyleSheet(
+            f"background:{surface}; border:{border_width}px solid {border_color}; "
+            "border-radius:14px;"
+        )
+
+        use_shadow = not theme_tokens.reduce_effects() and (self._selected or self._hovered)
+        self._shadow_effect.setEnabled(use_shadow)
+        shadow = QColor(theme_tokens.ACCENT_VIOLET if self._selected else theme_tokens.ACCENT)
+        shadow.setAlpha(46 if self._selected else 30)
+        self._shadow_effect.setColor(shadow)
+        if use_shadow:
+            self._shadow_animation.stop()
+            self._shadow_animation.setStartValue(self._shadow_effect.blurRadius())
+            self._shadow_animation.setEndValue(18 if self._selected else 14)
+            self._shadow_animation.start()
         else:
-            style = (
-                f"background:{BG_SURFACE}; border:1px solid {BORDER_GLASS}; "
-                f"border-radius:14px; box-shadow:"
-                f"0 2px 8px rgba(10,12,16,0.30), "
-                f"inset 0 1px 0 rgba(255,255,255,0.06);"
-            )
-        self.setStyleSheet(style)
+            self._shadow_animation.stop()
+            self._shadow_effect.setBlurRadius(8)
+
+    def enterEvent(self, event) -> None:  # noqa: N802
+        self._hovered = True
+        self._update_surface()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:  # noqa: N802
+        self._hovered = False
+        self._update_surface()
+        super().leaveEvent(event)
 
     # ── Interaction ────────────────────────────────────────────────
 

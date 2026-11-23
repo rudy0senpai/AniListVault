@@ -51,7 +51,7 @@ def _panel(title: str) -> tuple[QFrame, QVBoxLayout]:
     frame = QFrame()
     frame.setObjectName("statPanel")
     frame.setStyleSheet(
-        f"#statPanel {{ background:{theme_tokens.BG_PANEL}; border:1px solid {theme_tokens.BORDER};"
+        f"#statPanel {{ background:{theme_tokens.GLASS_SURFACE}; border:1px solid {theme_tokens.BORDER};"
         " border-radius:10px; }"
     )
     layout = QVBoxLayout(frame)
@@ -96,7 +96,7 @@ class _KPICard(QFrame):
         self._color = color or theme_tokens.ACCENT
 
         self.setStyleSheet(
-            f"#kpiCard {{ background:{theme_tokens.BG_PANEL}; border:1px solid {theme_tokens.BORDER};"
+            f"#kpiCard {{ background:{theme_tokens.GLASS_SURFACE}; border:1px solid {theme_tokens.BORDER};"
             f" border-radius:6px; }}"
         )
 
@@ -538,7 +538,7 @@ class OverviewPanel(QFrame):
         # Donut chart
         self._donut = _DonutChart()
         self._donut.setStyleSheet(
-            f"background:{theme_tokens.BG_PANEL}; border-radius:8px; "
+            f"background:{theme_tokens.GLASS_SURFACE}; border-radius:8px; "
             f"border:1px solid {theme_tokens.BORDER};"
         )
         frame_layout.addWidget(self._donut, 0)
@@ -587,12 +587,12 @@ class OverviewPanel(QFrame):
         for frame in self.findChildren(QFrame):
             if frame.objectName() == "statPanel":
                 frame.setStyleSheet(
-                    f"#statPanel {{ background:{theme_tokens.BG_PANEL}; "
+                    f"#statPanel {{ background:{theme_tokens.GLASS_SURFACE}; "
                     f"border:1px solid {theme_tokens.BORDER}; border-radius:10px; }}"
                 )
             elif frame.objectName() == "kpiCard":
                 frame.setStyleSheet(
-                    f"#kpiCard {{ background:{theme_tokens.BG_PANEL}; border:1px solid {theme_tokens.BORDER};"
+                    f"#kpiCard {{ background:{theme_tokens.GLASS_SURFACE}; border:1px solid {theme_tokens.BORDER};"
                     f" border-radius:8px; }}"
                 )
 

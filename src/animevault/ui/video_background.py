@@ -9,11 +9,12 @@ video decodes.
 from __future__ import annotations
 
 import logging
+import math
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import QObject, Qt, QUrl, Signal
-from PySide6.QtGui import QColor, QLinearGradient, QPainter, QPixmap
+from PySide6.QtCore import QObject, QPointF, Qt, QTimer, QUrl, Signal
+from PySide6.QtGui import QColor, QBrush, QLinearGradient, QPainter, QPixmap, QRadialGradient
 from PySide6.QtWidgets import QWidget
 
 from animevault.ui import theme as theme_tokens
@@ -138,6 +139,11 @@ class VideoBackground(QWidget):
         self._player: Optional[_VideoPlayer] = None
         self._status = "starting"
         self._effects_reduced = False
+        self._ambient_phase = 0.0
+        self._ambient_timer = QTimer(self)
+        self._ambient_timer.setInterval(100)
+        self._ambient_timer.timeout.connect(self._advance_ambient)
+        self._ambient_timer.start()
 
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
@@ -177,13 +183,44 @@ class VideoBackground(QWidget):
         self._effects_reduced = bool(reduced)
         if self._player is not None:
             self._player.set_paused(self._effects_reduced)
+        if self._effects_reduced:
+            self._ambient_timer.stop()
+        elif not self._ambient_timer.isActive():
+            self._ambient_timer.start()
         self.update()
 
     def shutdown(self) -> None:
         """Stop playback and release decoder resources."""
+        self._ambient_timer.stop()
         if self._player is not None:
             self._player.stop()
             self._player = None
+
+    def _advance_ambient(self) -> None:
+        """Move the low-contrast light washes behind the content layer."""
+        self._ambient_phase = (self._ambient_phase + 0.018) % math.tau
+        self.update()
+
+    def _paint_ambient_wash(self, painter: QPainter) -> None:
+        if self.width() <= 0 or self.height() <= 0:
+            return
+        phase = self._ambient_phase
+        radius = max(self.width(), self.height()) * 0.78
+        layers = (
+            (theme_tokens.ACCENT_VIOLET, 0.28 + 0.06 * math.sin(phase), 0.34 + 0.05 * math.cos(phase * 0.7), 18),
+            (theme_tokens.ACCENT_SKY, 0.74 + 0.05 * math.cos(phase * 0.8), 0.72 + 0.04 * math.sin(phase * 0.6), 13),
+        )
+        for color_value, x_ratio, y_ratio, alpha in layers:
+            color = QColor(color_value)
+            color.setAlpha(alpha)
+            clear = QColor(color)
+            clear.setAlpha(0)
+            gradient = QRadialGradient(
+                QPointF(self.width() * x_ratio, self.height() * y_ratio), radius
+            )
+            gradient.setColorAt(0.0, color)
+            gradient.setColorAt(1.0, clear)
+            painter.fillRect(self.rect(), QBrush(gradient))
 
     # ── Painting ───────────────────────────────────────────────────
 
@@ -211,13 +248,8 @@ class VideoBackground(QWidget):
             y = (scaled.height() - self.height()) // 2
             painter.drawPixmap(-x, -y, scaled)
             painter.setOpacity(1.0)
-        elif not self._effects_reduced:
-            # Soft cyan glow so the empty state still looks designed.
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(34, 211, 238, 16))
-            radius = int(self.width() * 0.55)
-            painter.drawEllipse(
-                int(self.width() * 0.2), int(self.height() * 0.6), radius, radius
-            )
+
+        if not self._effects_reduced:
+            self._paint_ambient_wash(painter)
 
         painter.end()

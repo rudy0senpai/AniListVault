@@ -59,7 +59,7 @@ def _panel(title: str) -> tuple[QFrame, QVBoxLayout]:
     frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
     frame.setMinimumHeight(0)
     frame.setStyleSheet(
-        f"#statPanel {{ background:{theme_tokens.BG_PANEL}; border:1px solid {theme_tokens.BORDER};"
+        f"#statPanel {{ background:{theme_tokens.GLASS_SURFACE}; border:1px solid {theme_tokens.BORDER};"
         " border-radius:12px; }"
     )
     layout = QVBoxLayout(frame)
@@ -104,7 +104,7 @@ class _KPICard(QFrame):
         self._color = color or theme_tokens.ACCENT
 
         self.setStyleSheet(
-            f"#kpiCard {{ background:{theme_tokens.BG_PANEL}; border:1px solid {theme_tokens.BORDER};"
+            f"#kpiCard {{ background:{theme_tokens.GLASS_SURFACE}; border:1px solid {theme_tokens.BORDER};"
             f" border-radius:10px; }}"
         )
 
@@ -463,7 +463,7 @@ class _MediaCardMini(QFrame):
         self.setFixedHeight(96)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setStyleSheet(
-            f"#miniCard {{ background:{theme_tokens.BG_PANEL}; border:1px solid {theme_tokens.BORDER};"
+            f"#miniCard {{ background:{theme_tokens.GLASS_SURFACE}; border:1px solid {theme_tokens.BORDER};"
             f" border-radius:8px; }}"
         )
 
@@ -773,7 +773,7 @@ class DashboardPanel(QFrame):
         # Donut chart
         self._donut = _DonutChart()
         self._donut.setStyleSheet(
-            f"background:{theme_tokens.BG_PANEL}; border-radius:12px; "
+            f"background:{theme_tokens.GLASS_SURFACE}; border-radius:12px; "
             f"border:1px solid {theme_tokens.BORDER};"
         )
         frame_layout.addWidget(self._donut, 0)
@@ -847,7 +847,7 @@ class DashboardPanel(QFrame):
 
         self._tier_chart = _VerticalTierChart()
         self._tier_chart.setStyleSheet(
-            f"background:{theme_tokens.BG_PANEL}; border-radius:12px; "
+            f"background:{theme_tokens.GLASS_SURFACE}; border-radius:12px; "
             f"border:1px solid {theme_tokens.BORDER};"
         )
         frame_layout.addWidget(self._tier_chart, 0)
@@ -1047,17 +1047,17 @@ class DashboardPanel(QFrame):
         for frame in self.findChildren(QFrame):
             if frame.objectName() == "statPanel":
                 frame.setStyleSheet(
-                    f"#statPanel {{ background:{theme_tokens.BG_PANEL}; "
+                    f"#statPanel {{ background:{theme_tokens.GLASS_SURFACE}; "
                     f"border:1px solid {theme_tokens.BORDER}; border-radius:12px; }}"
                 )
             elif frame.objectName() == "kpiCard":
                 frame.setStyleSheet(
-                    f"#kpiCard {{ background:{theme_tokens.BG_PANEL}; border:1px solid {theme_tokens.BORDER};"
+                    f"#kpiCard {{ background:{theme_tokens.GLASS_SURFACE}; border:1px solid {theme_tokens.BORDER};"
                     f" border-radius:10px; }}"
                 )
             elif frame.objectName() == "miniCard":
                 frame.setStyleSheet(
-                    f"#miniCard {{ background:{theme_tokens.BG_PANEL}; border:1px solid {theme_tokens.BORDER};"
+                    f"#miniCard {{ background:{theme_tokens.GLASS_SURFACE}; border:1px solid {theme_tokens.BORDER};"
                     f" border-radius:8px; }}"
                 )
 

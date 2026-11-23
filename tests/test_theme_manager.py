@@ -40,17 +40,17 @@ from animevault.ui.theme import (  # noqa: E402
 
 def test_design_tokens_are_fixed():
     assert BG_DEEP == "#0a0c10"
-    assert BG_INPUT == "#08090e"
-    assert BORDER == "#2b3140"
-    assert ACCENT == "#2dd4bf"
-    assert ACCENT_DIM == "#14b8a6"
-    assert ACCENT_DEEP == "#0d9488"
-    assert ACCENT_VIOLET == "#8b5cf6"
-    assert TEXT_MUTED == "#64748b"
-    assert TEXT_ON_ACCENT == "#06121f"
-    assert DANGER == "#ef4444"
-    assert SUCCESS == "#22c55e"
-    assert WARNING == "#eab308"
+    assert BG_INPUT == "#0e121a"
+    assert BORDER == "#303b4c"
+    assert ACCENT == "#a3eee2"
+    assert ACCENT_DIM == "#78d8cb"
+    assert ACCENT_DEEP == "#4db7ae"
+    assert ACCENT_VIOLET == "#c7b6ff"
+    assert TEXT_MUTED == "#8a98ad"
+    assert TEXT_ON_ACCENT == "#10202a"
+    assert DANGER == "#ff9ca8"
+    assert SUCCESS == "#a7e7b6"
+    assert WARNING == "#f6db95"
 
 
 def test_tokens_form_restrained_dark_palette():
@@ -79,8 +79,8 @@ def test_every_tier_has_a_colour():
 
 
 def test_status_colours_are_accessible_pairs():
-    assert status_colors("watching") == ("#0e7490", "#67e8f9")
-    assert status_colors("completed") == ("#14532d", "#86efac")
+    assert status_colors("watching") == ("#163e4b", "#a5e9f5")
+    assert status_colors("completed") == ("#1b3e2c", "#afe9c1")
     assert status_colors("missing") == ("#1f2937", TEXT_SECONDARY)
 
 

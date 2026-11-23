@@ -57,6 +57,30 @@ class TestUIFlow:
         assert not any(type(window._body.itemAt(i).widget()).__name__ == "RecommendationPanel" for i in range(window._body.count()) if window._body.itemAt(i).widget())
         window.close()
 
+    def test_main_window_glass_surfaces_preserve_primary_button_contrast(self, migrated_database, tmp_path):
+        from PySide6.QtCore import QSettings
+        from PySide6.QtGui import QPalette
+        from PySide6.QtWidgets import QPushButton
+        from animevault.ui.main_window import MainWindow
+        from animevault.ui.theme import ACCENT
+        from animevault.ui.visual_effects import RadialGradientLabel
+
+        QSettings.setDefaultFormat(QSettings.Format.IniFormat)
+        QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, str(tmp_path))
+        QSettings("AnimeVault", "AnimeVault").clear()
+        window = MainWindow()
+        window.show()
+        self.app.processEvents()
+
+        assert window.findChild(RadialGradientLabel, "appTitle") is not None
+        assert window._grid.objectName() == "cardGrid"
+        assert "QWidget#centralWidget" in window.styleSheet()
+        assert "transparent" in window._overview_scroll.viewport().styleSheet()
+        primary = window.findChild(QPushButton, "primaryButton")
+        assert primary is not None and primary.isEnabled()
+        assert primary.palette().color(QPalette.ColorRole.Button).name().lower() == ACCENT.lower()
+        window.close()
+
     def test_recommendations_open_in_one_independent_reusable_window(self, migrated_database, tmp_path, monkeypatch):
         from PySide6.QtCore import QSettings, Qt
         from PySide6.QtWidgets import QDialog

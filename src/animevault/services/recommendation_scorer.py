@@ -252,20 +252,10 @@ class RecommendationScorer:
         return min(1.0, total)
 
     def _similarity_to_highly_rated(self, item, candidate: RankingCandidate) -> float:
-        """Similarity to the user's highly rated / favourite titles."""
-        profile = self.profile
-        if not profile or not profile.signal_values:
-            return 0.0
-        # Compare against items that were used to build the profile (assumed
-        # to be highly rated / favourited).  Compute a simple token-overlap
-        # between the candidate and each highly-rated item.
-        similarities = []
-        for other in profile.signal_values.per_genre_ratings:
-            # We need the list of highly-rated library items — but we only have
-            # the profile here.  Fall back to the genre affinity signal.
-            pass
-        # Use metadata similarity as a proxy for "similarity to preferred".
-        return candidate.similarity.metadata
+        """Similarity to positively engaged library titles, computed by engine."""
+        # The engine computes the best full similarity breakdown against
+        # positively engaged library items before invoking this scorer.
+        return max(0.0, min(1.0, candidate.similarity.total))
 
     def _metadata_similarity(self, item, candidate: RankingCandidate) -> float:
         """Weighted overlap with studios observed in positive library entries."""
@@ -332,5 +322,5 @@ class RecommendationScorer:
             )
             scored.append((score, rec))
 
-        scored.sort(key=lambda kv: kv[0], reverse=True)
+        scored.sort(key=lambda kv: (-kv[0], kv[1].title.casefold(), kv[1].media_type.casefold()))
         return [rec for _, rec in scored]

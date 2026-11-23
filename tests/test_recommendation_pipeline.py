@@ -110,9 +110,17 @@ def build_engine(library, *, online_discovery=True, discover=None):
     a callable).  The hook is injected into the engine module so it is used
     exactly as the real :func:`discover_candidates` call site would use it."""
     class _NoJikan:
+        stats = {}
+        errors = []
+
         @staticmethod
         def recommendations_for(*args, **kwargs):
             return []
+
+        def genre_candidates(self, genres, **kwargs):
+            if callable(discover):
+                return discover(genres[0] if genres else "", None, kwargs.get("limit", 20))
+            return discover or []
 
     engine = RecommendationEngine(
         library_items=library,
@@ -120,22 +128,80 @@ def build_engine(library, *, online_discovery=True, discover=None):
         online_discovery=online_discovery,
         jikan_service=_NoJikan(),
     )
-    if discover is not None:
-
-        def _fake_discover(*args, **kwargs):
-            if callable(discover):
-                return discover(*args, **kwargs)
-            return discover
-
-        import animevault.services.recommendation_engine as re_module
-
-        re_module.discover_candidates = _fake_discover
     return engine
+
+
+def test_positive_seed_selection_prioritizes_favorites_and_excludes_plan_to_watch():
+    library = [
+        make_anime("Planned", mal_id=1, status="plan_to_watch", score=10, favorite=True),
+        make_anime("Dropped", mal_id=2, status="dropped", score=2),
+        make_anime("Completed", mal_id=3, status="completed", score=9),
+        make_anime("Favorite", mal_id=4, status="watching", favorite=True),
+        make_anime("Favorite duplicate", mal_id=4, status="completed", score=10),
+    ]
+    assert RecommendationEngine._select_positive_seeds(library) == [(4, "Favorite"), (3, "Completed")]
+
+
+def test_genre_discovery_runs_without_mal_seeds_and_uses_preference_ranking():
+    library = [make_anime("Loved Action", status="completed", score=10, genres=["Action"], mal_id=None)]
+    candidate = make_candidate("External Action", mal_id=999, genres=["Action"], discovery_source="jikan_genre")
+    weaker = make_candidate("External Comedy", mal_id=1000, genres=["Comedy"], discovery_source="jikan_genre")
+
+    class Service:
+        stats = {}
+        errors = []
+
+        def reset_diagnostics(self):
+            pass
+
+        def recommendations_for(self, seeds, **kwargs):
+            raise AssertionError("no usable MAL-ID seeds are available")
+
+        def genre_candidates(self, genres, **kwargs):
+            assert [name.casefold() for name in genres] == ["action"]
+            return [candidate, weaker]
+
+    engine = RecommendationEngine(library, user_hash="genre-only", online_discovery=True, jikan_service=Service())
+    results = engine.get_recommendations()
+    assert [result.title for result in results[:2]][0] == "External Action"
+    action, comedy = next(result for result in results if result.title == "External Action"), next(result for result in results if result.title == "External Comedy")
+    assert action.score > comedy.score
+    assert any("Genre" in reason for reason in action.reasons)
+    assert engine.get_preference_summary()["discovery_stats"]["usable_seeds"] == 0
+
+
+def test_genre_candidates_survive_related_endpoint_failure():
+    library = [make_anime("Loved Action", status="completed", score=10, genres=["Action"], mal_id=123)]
+    candidate = make_candidate("Genre Result", mal_id=999, genres=["Action"], discovery_source="jikan_genre")
+
+    class Service:
+        stats = {}
+        errors = []
+
+        def recommendations_for(self, *args, **kwargs):
+            raise RuntimeError("related endpoint timeout")
+
+        def genre_candidates(self, *args, **kwargs):
+            return [candidate]
+
+    engine = RecommendationEngine(library, user_hash="partial-provider", online_discovery=True, jikan_service=Service())
+    results = engine.get_recommendations()
+    summary = engine.get_preference_summary()
+    assert any(result.title == "Genre Result" for result in results)
+    assert summary["recommendation_status"] == "valid_recommendations"
+    assert summary["discovery_errors"][0]["source"] == "related_recommendations"
 
 
 # ── Owned-item exclusion ─────────────────────────────────────────────────
 
 class TestOwnedItemExclusion:
+    def test_title_fallback_excludes_jikan_candidate_when_library_lacks_provider_id(self):
+        library = [make_anime("My Local Series", id=42, status="completed", genres=["Action"])]
+        candidate = make_candidate("My Local Series", mal_id=789, media_type="TV", genres=["Action"])
+        engine = build_engine(library, online_discovery=True, discover=[candidate])
+        assert engine.get_recommendations() == []
+        assert engine._last_outcome == "all_excluded_owned"
+
     def test_same_numeric_id_from_different_provider_is_not_owned(self):
         library = [make_anime("Same Title", id=42, status="completed", genres=["Action"], mal_id=1)]
         candidate = make_candidate("Same Title", anilist_id=1, genres=["Action"])

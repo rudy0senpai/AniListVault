@@ -8,9 +8,8 @@ library.  Only run when the online discovery setting is enabled.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
-from typing import Iterable, Optional, Sequence
 from dataclasses import dataclass, field
+from typing import Optional, Sequence
 
 from animevault.services.providers.base import AnimeMetadata, BaseProvider
 from animevault.services.providers.anilist import AniListProvider
@@ -92,8 +91,6 @@ def discover_candidates(
     providers = list(providers or _FULL_METADATA_PROVIDERS)
 
     candidates: list[Candidate] = []
-    seen_ids: set[int] = set()
-
     for pname in providers:
         provider = _get_provider(pname)
         if provider is None:
@@ -104,10 +101,14 @@ def discover_candidates(
             continue
 
         for meta in metas:
+            if not isinstance(meta, AnimeMetadata):
+                logger.debug("Provider %s returned malformed metadata: %r", pname, meta)
+                continue
             # Category filter.
             if categories:
-                cats = {g.strip().lower() for g in (meta.genres or [])}
-                if not cats & set(categories):
+                cats = {str(g).strip().casefold() for g in (meta.genres or []) if g}
+                requested_categories = {str(g).strip().casefold() for g in categories if g}
+                if not cats & requested_categories:
                     continue
 
             candidate = Candidate(
@@ -132,6 +133,7 @@ def discover_candidates(
                 episodes=meta.episodes or 0,
                 discovery_source=pname,
             )
+            candidates.append(candidate)
     # Deduplicate by a stable provider identifier when one is available.
     # Otherwise fall back to a normalized title + media type.  Two records with
     # different provider identifiers (e.g. one from Anilist and one from Kitsu)

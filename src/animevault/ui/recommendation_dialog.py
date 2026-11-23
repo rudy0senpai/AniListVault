@@ -25,10 +25,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from animevault.services.recommendation_engine import (
-    RecommendationEngine,
-    RecommendationResult,
-)
+from animevault.recommendation.engine import HybridRecommendationEngine as RecommendationEngine
+from animevault.services.recommendation_engine import RecommendationResult
+from animevault.recommendation.feedback import FeedbackStore
+from animevault.services.title_norm import normalize_title
 from animevault.models.anime import Anime
 from animevault.models.literature import Literature
 
@@ -354,12 +354,34 @@ class RecommendationDialog(QDialog):
             try:
                 summary = self._engine.get_preference_summary()
                 outcome = summary.get("recommendation_status", "")
-                if outcome == "insufficient_preference_data":
-                    msg = "Not enough library data yet. Add anime to your library to get started."
+                if outcome in {"no_usable_profile", "insufficient_preference_data"}:
+                    msg = "Not enough positive or negative library signals yet. Add ratings, tiers, favorites, or watch activity."
+                elif outcome == "no_candidates":
+                    msg = "No recommendations are cached and the provider returned no candidates. Try again when online."
+                elif outcome == "provider_unavailable":
+                    errors = summary.get("discovery_errors", [])
+                    labels = sorted({f"{error.get('source', 'Jikan')}: {error.get('category', 'provider_error')}" for error in errors})
+                    msg = "Jikan is unavailable and no cached candidates can be used."
+                    if labels:
+                        msg += " Details: " + "; ".join(labels)
+                elif outcome == "no_eligible_candidates":
+                    msg = "All discovered candidates are already in your library or excluded by eligibility filters."
+                elif outcome == "filtered_out":
+                    msg = "Recommendations were removed by your current filters or minimum score."
+                elif outcome == "offline_cached":
+                    msg = "Offline mode: showing recommendations from cached provider metadata."
                 elif outcome == "no_external_candidates":
                     msg = "No external recommendations found. Your library doesn't match any titles outside it yet."
                 elif outcome == "provider_failure":
-                    msg = "Recommendations could not be generated because of a provider or network error. Please try again later."
+                    errors = summary.get("discovery_errors", [])
+                    labels = sorted({f"{error.get('source', 'Jikan')}: {error.get('category', 'provider_error')}" for error in errors})
+                    msg = "Jikan discovery failed. Check your connection or wait before refreshing."
+                    if labels:
+                        msg += " Details: " + "; ".join(labels)
+                elif outcome == "no_usable_mal_seeds":
+                    msg = "No positively engaged library titles have usable MAL IDs; genre discovery found no candidates."
+                elif outcome == "no_matching_genre_candidates":
+                    msg = "No matching anime were found for your preferred genres. Try refreshing later."
                 elif outcome == "all_excluded_owned":
                     msg = "All discovered recommendations are already in your library."
                 elif outcome == "all_excluded_filter":
@@ -371,11 +393,20 @@ class RecommendationDialog(QDialog):
             self._status_label.setText(msg)
             self._status_label.setVisible(True)
             return
-        if any(getattr(result, "is_cached", False) for result in self._current_results):
-            self._status_label.setText("Showing cached Jikan candidates where available.")
+        if self._engine.get_preference_summary().get("recommendation_status") == "offline_cached" or any(getattr(result, "is_cached", False) for result in self._current_results):
+            self._status_label.setText("Offline mode: showing recommendations from cached provider metadata.")
             self._status_label.setVisible(True)
         else:
             self._status_label.setVisible(False)
+        try:
+            summary = self._engine.get_preference_summary()
+            errors = summary.get("discovery_errors", [])
+            if errors:
+                labels = sorted({f"{error.get('source', 'Jikan')}: {error.get('category', 'provider_error')}" for error in errors})
+                self._status_label.setText("Some discovery sources were unavailable; showing available results. " + "; ".join(labels))
+                self._status_label.setVisible(True)
+        except Exception:
+            pass
         self._render_cards(self._current_results)
 
     def _on_failed(self, msg: str, request_id: int = 0) -> None:
@@ -403,8 +434,25 @@ class RecommendationDialog(QDialog):
             card = _RecCard(r, self, self._poster_manager)
             card.add_requested.connect(self._on_add_to_library)
             card.details_requested.connect(self._on_view_details)
+            card.feedback_requested.connect(self._on_feedback)
             self._card_widgets.append(card)
         self._reflow_cards()
+
+    def _on_feedback(self, action: str, result: RecommendationResult) -> None:
+        field = result.provider_key or ""
+        candidate_key = f"{field}:{result.provider_id}" if field and result.provider_id else f"title:{normalize_title(result.title)}:{result.media_type.casefold()}"
+        try:
+            FeedbackStore().record(action, candidate_key=candidate_key, title=result.title)
+            self._status_label.setText(f"Saved {action.replace('_', ' ')} feedback for {result.title}.")
+            self._status_label.setVisible(True)
+            if action == "plan_to_watch":
+                self._on_add_to_library(result)
+            else:
+                self._start_load()
+        except Exception as exc:
+            _logger.warning("Could not save recommendation feedback: %s", exc)
+            self._status_label.setText("Could not save feedback locally.")
+            self._status_label.setVisible(True)
 
     def _on_add_to_library(self, result: RecommendationResult) -> None:
         media_type = (result.media_type or "").strip().lower()
@@ -421,6 +469,12 @@ class RecommendationDialog(QDialog):
                     QMessageBox.information(self, "Already in Library", f'"{result.title}" is already in your library.')
                     return
                 Anime.create(title=result.title, status="plan_to_watch")
+            try:
+                field = result.provider_key or ""
+                key = f"{field}:{result.provider_id}" if field and result.provider_id else f"title:{normalize_title(result.title)}:{result.media_type.casefold()}"
+                FeedbackStore().record("add_to_library", candidate_key=key, title=result.title)
+            except Exception as exc:
+                _logger.warning("Library action succeeded but feedback cache could not be updated: %s", exc)
             QMessageBox.information(self, "Added", f'"{result.title}" added to your library.')
         except Exception as exc:
             QMessageBox.warning(self, "Error", f"Could not add: {exc}")
@@ -448,6 +502,7 @@ class _RecCard(QWidget):
 
     add_requested = Signal(object)
     details_requested = Signal(object)
+    feedback_requested = Signal(str, object)
 
     def __init__(self, result: RecommendationResult, parent=None, poster_manager: Optional[_PosterWorkerManager] = None):
         super().__init__(parent)
@@ -523,6 +578,17 @@ class _RecCard(QWidget):
         view_btn = QPushButton("View Details")
         view_btn.clicked.connect(lambda: self.details_requested.emit(self._result))
         btn_row.addWidget(view_btn)
+        feedback_btn = QPushButton("Feedback")
+        from PySide6.QtWidgets import QMenu
+        menu = QMenu(feedback_btn)
+        for action, label in (("like", "Like"), ("dislike", "Dislike"),
+                              ("not_interested", "Not interested"),
+                              ("watched_elsewhere", "Already watched elsewhere"),
+                              ("plan_to_watch", "Add to Plan to Watch"), ("dismiss", "Dismiss")):
+            menu_action = menu.addAction(label)
+            menu_action.triggered.connect(lambda checked=False, value=action: self.feedback_requested.emit(value, self._result))
+        feedback_btn.setMenu(menu)
+        btn_row.addWidget(feedback_btn)
         layout.addLayout(btn_row)
 
     def _on_poster_ready(self, url: str, path: str) -> None:
@@ -581,6 +647,16 @@ class _RecommendationDetailsDialog(QDialog):
             reasons.setWordWrap(True)
             reasons.setStyleSheet("color:gray; font-size:11px;")
             layout.addWidget(reasons)
+
+        if result.score_breakdown:
+            breakdown = "Score breakdown: " + "  •  ".join(
+                f"{name.replace('_', ' ')} {value:.2f}"
+                for name, value in sorted(result.score_breakdown.items(), key=lambda entry: -entry[1])
+            )
+            details = QLabel(breakdown)
+            details.setWordWrap(True)
+            details.setStyleSheet("color:gray; font-size:11px;")
+            layout.addWidget(details)
 
         if result.poster_url:
             poster = QLabel()

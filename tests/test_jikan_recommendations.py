@@ -51,6 +51,74 @@ def test_missing_score_is_not_negative_and_empty_input_is_safe():
     assert not analyze_preferences([]).has_preferences()
 
 
+def test_jikan_genre_catalogue_and_filter_endpoints_use_actual_ids():
+    provider = JikanProvider()
+    with patch.object(provider, "_get_with_retry", side_effect=[
+        {"data": [{"mal_id": 1, "name": "Action"}, {"mal_id": "bad", "name": "Bad"}, None]},
+        {"data": [
+            {"mal_id": 2, "title": "Lower score", "type": "TV", "score": 7.0, "rank": 20},
+            {"mal_id": 1, "title": "Top", "type": "Movie", "score": 9.0, "rank": 5},
+        ], "pagination": {"has_next_page": True}},
+    ]) as get:
+        catalogue = provider.get_genre_catalogue()
+        results, has_next = provider.get_anime_by_genre(1, page=1, limit=12)
+    assert catalogue == [(1, "Action")]
+    assert [item.title for item in results] == ["Top", "Lower score"]
+    assert results[0].mal_id == 1 and results[0].media_type == "MOVIE"
+    assert has_next
+    assert get.call_args.args[0].endswith("genres=1&order_by=score&sort=desc&page=1&limit=12&sfw=true")
+
+
+def test_jikan_429_is_retried_with_bounded_backoff():
+    from animevault.services.providers.base import ProviderError
+
+    provider = JikanProvider()
+    with patch.object(provider, "_throttle"), patch("animevault.services.providers.jikan._jikan_get", side_effect=[
+        ProviderError("rate limited", status_code=429, retryable=True, retry_after=0),
+        {"data": []},
+    ]) as request, patch("animevault.services.providers.jikan.time.sleep") as sleep:
+        payload = provider._get_with_retry("https://api.jikan.moe/v4/genres/anime", attempts=2)
+    assert payload == {"data": []}
+    assert request.call_count == 2
+    sleep.assert_called_once()
+
+
+class _GenreProvider:
+    def __init__(self):
+        self.catalogue_calls = 0
+        self.pages = []
+
+    def get_genre_catalogue(self):
+        self.catalogue_calls += 1
+        return [(2, "Action"), (8, "Sci-Fi"), (10, "Fantasy")]
+
+    def get_anime_by_genre(self, genre_id, *, page=1, limit=15):
+        self.pages.append((genre_id, page, limit))
+        title = f"g{genre_id}-p{page}"
+        return [AnimeMetadata(title=title, mal_id=genre_id * 100 + page, media_type="TV", genres=["Action"], synopsis="s")], page == 1
+
+    def get_recommendations(self, mal_id, limit=10):
+        raise AssertionError("genre-only discovery must not need MAL seeds")
+
+    def get_details(self, provider_id):
+        raise AssertionError("complete metadata should not need full details")
+
+
+def test_genre_name_mapping_pagination_and_cache(tmp_path):
+    provider = _GenreProvider()
+    service = JikanRecommendationService(provider, cache_dir=tmp_path)
+    first = service.genre_candidates(["Fantasy", "Sci-Fi", "Action", "Unknown"])
+    assert len(first) == 6
+    assert service.stats["genre_ids_mapped"] == 3
+    assert len(provider.pages) == 6
+    assert all(candidate.discovery_source == "jikan_genre" for candidate in first)
+    second = service.genre_candidates(["Fantasy", "Sci-Fi", "Action"])
+    assert len(second) == 6 and all(candidate.is_cached for candidate in second)
+    assert provider.catalogue_calls == 1
+    assert len(provider.pages) == 6
+    assert (tmp_path / "anime_genres.json").exists()
+
+
 def test_jikan_recommendation_endpoint_parses_and_deduplicates_metadata():
     response = {
         "data": [

@@ -10,7 +10,6 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, QSettings, QSize, QRect
 from PySide6.QtWidgets import (
     QApplication,
-    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -22,6 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from animevault import __version__
+from animevault.ui.visual_effects import AnimatedToggle
 
 
 class ThemeSettingsDialog(QDialog):
@@ -58,7 +58,7 @@ class ThemeSettingsDialog(QDialog):
         layout.setContentsMargins(0, 4, 0, 8)
         layout.setSpacing(18)
 
-        reduce = QCheckBox("Reduce transparency and effects")
+        reduce = AnimatedToggle("Reduce transparency and effects")
         reduce.setObjectName("effectsCheckbox")
         reduce.setMinimumHeight(42)
         layout.addWidget(reduce)
@@ -76,7 +76,7 @@ class ThemeSettingsDialog(QDialog):
         footer = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         footer.button(QDialogButtonBox.StandardButton.Close).setObjectName("settingsSecondary")
         footer.button(QDialogButtonBox.StandardButton.Close).setMinimumHeight(40)
-        footer.rejected.connect(self.reject)
+        footer.button(QDialogButtonBox.StandardButton.Close).clicked.connect(self.accept)
         outer.addWidget(footer)
         outer.addWidget(content, 1)
 

@@ -10,6 +10,7 @@ import json
 import logging
 import re
 import time
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -21,6 +22,16 @@ logger = logging.getLogger(__name__)
 
 _BASE_URL = "https://api.jikan.moe/v4"
 _MIN_INTERVAL: float = 0.5   # seconds — Jikan allows ~3 req/sec
+_RATE_LOCK = threading.Lock()
+_GLOBAL_LAST_REQUEST = 0.0
+
+
+def _is_number(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _is_int(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
 
 
 def _jikan_get(url: str, timeout: int = 12) -> dict:
@@ -150,14 +161,18 @@ class JikanProvider(BaseProvider):
         self._last_request: float = 0.0
 
     def _throttle(self) -> None:
+        global _GLOBAL_LAST_REQUEST
         now = time.monotonic()
         if now < self._backoff_until:
             secs = int(self._backoff_until - now)
             raise ProviderError(f"Jikan in backoff for {secs}s", retryable=False)
-        wait = _MIN_INTERVAL - (now - self._last_request)
-        if wait > 0:
-            time.sleep(wait)
-        self._last_request = time.monotonic()
+        # One limiter shared by every provider instance/thread in this process.
+        with _RATE_LOCK:
+            wait = _MIN_INTERVAL - (time.monotonic() - _GLOBAL_LAST_REQUEST)
+            if wait > 0:
+                time.sleep(wait)
+            _GLOBAL_LAST_REQUEST = time.monotonic()
+            self._last_request = _GLOBAL_LAST_REQUEST
 
     def search(self, query: str, limit: int = 10) -> list[AnimeMetadata]:
         self._throttle()
@@ -215,6 +230,60 @@ class JikanProvider(BaseProvider):
             except (TypeError, ValueError, AttributeError) as exc:
                 logger.debug("Jikan: skipping malformed recommendation record: %s", exc)
         return sorted(results, key=lambda pair: pair[1], reverse=True)[:max(1, min(int(limit), 25))]
+
+    def get_genre_catalogue(self) -> list[tuple[int, str]]:
+        """Return Jikan's real MAL anime genre IDs and names."""
+        payload = self._get_with_retry(f"{_BASE_URL}/genres/anime")
+        entries = payload.get("data")
+        if not isinstance(entries, list):
+            raise ProviderError("Jikan genre catalogue returned an invalid response", retryable=False, provider="jikan")
+        genres = []
+        for entry in entries:
+            if not isinstance(entry, dict) or not entry.get("name"):
+                continue
+            try:
+                genre_id = int(entry.get("mal_id"))
+            except (TypeError, ValueError):
+                continue
+            if genre_id > 0:
+                genres.append((genre_id, str(entry["name"]).strip()))
+        return genres
+
+    def get_anime_by_genre(self, genre_id: int, *, page: int = 1, limit: int = 15) -> tuple[list[AnimeMetadata], bool]:
+        """Fetch a bounded, score-sorted page for one catalogue genre ID."""
+        genre_id = int(genre_id)
+        page = max(1, min(int(page), 1000))
+        limit = max(1, min(int(limit), 25))
+        if genre_id <= 0:
+            raise ValueError("genre_id must be positive")
+        params = urllib.parse.urlencode({
+            "genres": genre_id,
+            "order_by": "score",
+            "sort": "desc",
+            "page": page,
+            "limit": limit,
+            "sfw": "true",
+        })
+        payload = self._get_with_retry(f"{_BASE_URL}/anime?{params}")
+        entries = payload.get("data")
+        if not isinstance(entries, list):
+            raise ProviderError("Jikan genre discovery returned an invalid response", retryable=False, provider="jikan")
+        valid_entries = [entry for entry in entries if isinstance(entry, dict) and entry.get("mal_id") and entry.get("title")]
+        valid_entries.sort(
+            key=lambda entry: (
+                -(float(entry.get("score") or 0.0) if _is_number(entry.get("score")) else 0.0),
+                int(entry.get("rank") or 10**9) if _is_int(entry.get("rank")) else 10**9,
+            )
+        )
+        results = []
+        for entry in valid_entries:
+            try:
+                results.append(normalize_entry(entry))
+            except (TypeError, ValueError, AttributeError) as exc:
+                logger.debug("Jikan: skipping malformed genre entry: %s", exc)
+        pagination = payload.get("pagination")
+        has_next = bool(pagination.get("has_next_page")) if isinstance(pagination, dict) else False
+        return results, has_next
 
     def get_details(self, provider_id: str) -> AnimeMetadata:
         url = f"{_BASE_URL}/anime/{provider_id}/full"

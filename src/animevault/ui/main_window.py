@@ -45,6 +45,8 @@ from animevault.ui.overview_panel import OverviewPanel
 
 from animevault.ui.video_background import DEFAULT_OPACITY as BACKGROUND_OPACITY
 from animevault.ui.video_background import VideoBackground
+from animevault.ui.theme import application_stylesheet
+from animevault.ui.visual_effects import HoverLiftButton, RadialGradientLabel
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +73,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("AnimeVault")
         self.resize(1600, 900)
         self.setMinimumSize(900, 600)
+        self.setStyleSheet(application_stylesheet())
 
         self._bulk_worker = None
         self._progress_dialog: Optional[QProgressDialog] = None
@@ -99,6 +102,8 @@ class MainWindow(QMainWindow):
 
     def _build_ui(self) -> None:
         central = QWidget()
+        central.setObjectName("centralWidget")
+        central.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setCentralWidget(central)
         outer = QVBoxLayout(central)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -119,6 +124,7 @@ class MainWindow(QMainWindow):
 
         # Library page: grid + overview
         library_page = QWidget()
+        library_page.setObjectName("libraryPage")
         body = QHBoxLayout(library_page)
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(0)
@@ -152,6 +158,8 @@ class MainWindow(QMainWindow):
         self._overview = OverviewPanel()
         self._overview_scroll = QScrollArea()
         self._overview_scroll.setObjectName("overviewScroll")
+        self._overview_scroll.setStyleSheet("background: transparent; border: none;")
+        self._overview_scroll.viewport().setStyleSheet("background: transparent;")
         self._overview_scroll.setWidgetResizable(True)
         self._overview_scroll.setFrameShape(QFrame.Shape.NoFrame)
         self._overview_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -240,7 +248,7 @@ class MainWindow(QMainWindow):
         icon.setObjectName("appIcon")
         row.addWidget(icon)
 
-        title = QLabel("AnimeVault")
+        title = RadialGradientLabel("AnimeVault")
         title.setObjectName("appTitle")
         row.addWidget(title)
 
@@ -307,7 +315,7 @@ class MainWindow(QMainWindow):
         tools_btn.setMenu(tools_menu)
         row.addWidget(tools_btn)
 
-        rec_btn = QPushButton("🎯 Recommendations")
+        rec_btn = HoverLiftButton("🎯 Recommendations")
         rec_btn.setObjectName("primaryButton")
         rec_btn.setToolTip("Open the recommendations panel")
         rec_btn.clicked.connect(self._show_recommendations)
@@ -393,11 +401,12 @@ class MainWindow(QMainWindow):
 
     def _build_search_row(self) -> QWidget:
         row_widget = QWidget()
+        row_widget.setObjectName("searchRow")
         row = QHBoxLayout(row_widget)
         row.setContentsMargins(18, 14, 18, 14)
         row.setSpacing(14)
 
-        self._add_button = QPushButton("＋  Add Anime")
+        self._add_button = HoverLiftButton("＋  Add Anime")
         self._add_button.setObjectName("primaryButton")
         self._add_button.clicked.connect(self._on_add)
         row.addWidget(self._add_button)
@@ -1011,7 +1020,11 @@ class MainWindow(QMainWindow):
     def _show_settings(self) -> None:
         from animevault.ui.theme_dialog import ThemeSettingsDialog
 
-        ThemeSettingsDialog(self).exec()
+        dialog = ThemeSettingsDialog(self)
+        dialog.exec()
+        from animevault.ui.theme import liquid_glass, reduce_effects
+        self._background.set_effects_reduced(reduce_effects())
+        self._set_liquid_glass(liquid_glass())
 
     def _show_recommendations(self) -> None:
         """Show one reusable, independent recommendations window."""
