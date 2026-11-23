@@ -36,11 +36,16 @@ def create_app() -> QApplication:
             app.setWindowIcon(icon)
 
     # Restore appearance before any window is constructed or shown.
-    from animevault.ui.theme import ThemeManager
+    from animevault.ui.theme import (
+        liquid_glass,
+        reduce_effects,
+        set_liquid_glass,
+        set_reduce_effects,
+    )
 
-    manager = ThemeManager.instance(app)
-    manager.restore()
-    manager.set_reduce_effects(manager.reduce_effects)
+    # Sync appearance preferences from QSettings (no theme switching exists).
+    set_reduce_effects(reduce_effects(app))
+    set_liquid_glass(liquid_glass(app))
 
     # Make sure the database and schema exist before the first window
     # is shown, then bring the schema up to the current version.

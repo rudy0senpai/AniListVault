@@ -31,7 +31,7 @@ from animevault.models.anime import Anime
 from animevault.models.literature import Literature
 from animevault.tiers import TIERS
 from animevault.ui import theme as theme_tokens
-from animevault.ui.theme import tier_color, ThemeManager
+from animevault.ui.theme import tier_color, reduce_effects
 
 logger = logging.getLogger(__name__)
 
@@ -236,7 +236,7 @@ class _TierRow(QWidget):
         self._track_layout.setSpacing(0)
         self._fill = QFrame(self._track)
         self._fill.setFixedHeight(0)
-        tier_bg = tier_color(tier) if not ThemeManager.instance().reduce_effects else theme_tokens.ACCENT
+        tier_bg = tier_color(tier) if not reduce_effects() else theme_tokens.ACCENT
         self._fill.setStyleSheet(f"background:{tier_bg}; border-radius:3px;")
         self._track_layout.addWidget(self._fill)
         root.addWidget(self._track)
@@ -267,9 +267,9 @@ class _DonutChart(QFrame):
         self.setObjectName("donutChart")
         self._data = {}
         self._total = 0
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.setMinimumHeight(110)
-        self.setMaximumHeight(160)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.setMinimumHeight(180)
+        self.setMaximumHeight(300)
         self.setMinimumWidth(0)
 
     def set_data(self, data: dict[str, int]) -> None:
@@ -287,9 +287,9 @@ class _DonutChart(QFrame):
             painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, "No data")
             return
 
-        reduce_effects = ThemeManager.instance().reduce_effects
-        ring_width = 16 if not reduce_effects else 12
-        ring_gap = 4 if not reduce_effects else 2
+        effects_reduced = reduce_effects()
+        ring_width = 16 if not effects_reduced else 12
+        ring_gap = 4 if not effects_reduced else 2
 
         # Draw a ring for each category (outer to inner)
         radius = min(rect.width(), rect.height()) / 2
@@ -307,7 +307,7 @@ class _DonutChart(QFrame):
 
             color_str = _CATEGORY_COLORS.get(category, "#888888")
             color = QColor(color_str)
-            if reduce_effects:
+            if effects_reduced:
                 color = color.darker(120)
 
             pen = QPen(color)
@@ -352,8 +352,8 @@ class _CategoryDistBar(QWidget):
         super().__init__(parent)
         self._data = {}
         self._total = 0
-        self.setFixedHeight(40)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.setMinimumHeight(48)
         self.setMinimumWidth(0)
 
     def set_data(self, data: dict[str, int]) -> None:
@@ -478,9 +478,7 @@ class OverviewPanel(QFrame):
         root.addWidget(self._columns)
 
         # Connect to theme changes
-        ThemeManager.instance().theme_changed.connect(self._on_theme_changed)
-        ThemeManager.instance().effects_changed.connect(self._on_effects_changed)
-        ThemeManager.instance().liquid_glass_changed.connect(self._on_liquid_glass_changed)
+        # Theme-change signals are retired: the design system is single-palette.
 
     def _build_header(self, root: QVBoxLayout) -> None:
         header = QWidget()
@@ -583,16 +581,6 @@ class OverviewPanel(QFrame):
         self._tier_layout = frame_layout
         layout.addWidget(frame, 1)
 
-    def _on_theme_changed(self, theme_id: str) -> None:
-        self._refresh_styles()
-        self.apply_theme()
-
-    def _on_effects_changed(self, enabled: bool) -> None:
-        self._refresh_styles()
-
-    def _on_liquid_glass_changed(self, enabled: bool) -> None:
-        self._refresh_styles()
-
     def _refresh_styles(self) -> None:
         """Refresh inline styles that depend on theme tokens."""
         # Panel frames
@@ -618,18 +606,13 @@ class OverviewPanel(QFrame):
             row._count.setStyleSheet(f"color:{theme_tokens.TEXT_SECONDARY}; font-size:11px;")
 
         # Tier rows
-        reduce_effects = ThemeManager.instance().reduce_effects
+        effects_reduced = reduce_effects()
         for tier, row in self._tier_rows.items():
             row._label.setStyleSheet(f"color:{theme_tokens.TEXT_MUTED}; font-size:10px; font-weight:600;")
             row._count.setStyleSheet(f"color:{theme_tokens.TEXT_MUTED}; font-size:10px;")
-            tier_bg = tier_color(tier) if not reduce_effects else theme_tokens.ACCENT
+            tier_bg = tier_color(tier) if not effects_reduced else theme_tokens.ACCENT
             row._fill.setStyleSheet(f"background:{tier_bg}; border-radius:3px;")
 
-    def apply_theme(self) -> None:
-        """Public method to refresh theme-dependent styles."""
-        self._refresh_styles()
-        self._donut.update()
-        self._cat_dist_bar.update()
 
     def refresh(self, animes: list, literature: list) -> None:
         # KPI Cards

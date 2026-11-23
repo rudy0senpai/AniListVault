@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QScrollArea,
     QPushButton,
+    QSlider,
 )
 
 from animevault.media_types import (
@@ -36,7 +37,7 @@ from animevault.models.anime import Anime
 from animevault.models.literature import Literature
 from animevault.tiers import TIERS
 from animevault.ui import theme as theme_tokens
-from animevault.ui.theme import tier_color, ThemeManager
+from animevault.ui.theme import tier_color, reduce_effects, set_reduce_effects
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,8 @@ def _panel(title: str) -> tuple[QFrame, QVBoxLayout]:
     """A titled bordered panel; returns the frame and its layout."""
     frame = QFrame()
     frame.setObjectName("statPanel")
+    frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+    frame.setMinimumHeight(0)
     frame.setStyleSheet(
         f"#statPanel {{ background:{theme_tokens.BG_PANEL}; border:1px solid {theme_tokens.BORDER};"
         " border-radius:12px; }"
@@ -95,9 +98,9 @@ class _KPICard(QFrame):
     ) -> None:
         super().__init__(parent)
         self.setObjectName("kpiCard")
-        self.setFixedHeight(90)
+        self.setFixedHeight(110)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.setMinimumWidth(120)
+        self.setMinimumWidth(140)
         self._color = color or theme_tokens.ACCENT
 
         self.setStyleSheet(
@@ -232,94 +235,77 @@ class _BarRow(QWidget):
             self._percent.setText(f"{(value / self._max * 100):.0f}%" if self._max > 0 else "0%")
 
 
-class _TierBarRow(QWidget):
-    """A horizontal tier bar row for the dashboard - large, readable, professional."""
+class _VerticalTierChart(QWidget):
+    """A vertical bar chart for tier distribution, matching sample.png reference."""
 
-    def __init__(self, tier: str, count: int, maximum: int) -> None:
-        super().__init__()
-        self._tier = tier
-        self._max = maximum
-        self.setFixedHeight(40)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("verticalTierChart")
+        self._data: dict[str, int] = {}
+        self._total = 0
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.setMinimumHeight(280)
+        self.setMaximumHeight(360)
         self.setMinimumWidth(0)
 
-        root = QHBoxLayout(self)
-        root.setContentsMargins(8, 4, 8, 4)
-        root.setSpacing(12)
+    def set_data(self, data: dict[str, int]) -> None:
+        self._data = data
+        self._total = sum(data.values())
+        self.update()
 
-        # Tier label with color
-        self._label = QLabel(tier)
-        self._label.setObjectName("tierLabel")
-        self._label.setFixedWidth(50)
-        self._label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        reduce_effects = ThemeManager.instance().reduce_effects
-        tier_bg = tier_color(tier) if not reduce_effects else theme_tokens.ACCENT
-        self._label.setStyleSheet(
-            f"color:{tier_bg}; font-size:13px; font-weight:700;"
-        )
-        root.addWidget(self._label, 0)
+    def paintEvent(self, event) -> None:  # noqa: N802
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        rect = self.rect().adjusted(20, 10, -20, 30)
 
-        # Bar track
-        self._track = QFrame()
-        self._track.setFixedHeight(16)
-        self._track.setStyleSheet(f"background:{theme_tokens.BG_INPUT}; border-radius:8px;")
-        self._track.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self._track.setMinimumWidth(100)
-        track_layout = QHBoxLayout(self._track)
-        track_layout.setContentsMargins(0, 0, 0, 0)
-        track_layout.setSpacing(0)
+        if self._total == 0 or not self._data:
+            painter.setPen(QColor(theme_tokens.TEXT_MUTED))
+            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, "No tier data")
+            return
 
-        self._fill = QFrame(self._track)
-        self._fill.setFixedHeight(16)
-        self._fill.setStyleSheet(f"background:{tier_bg}; border-radius:8px;")
-        self._fill.setVisible(False)
-        track_layout.addWidget(self._fill)
+        tiers = [t for t in TIERS if t in self._data]
+        if not tiers:
+            tiers = list(self._data.keys())
 
-        root.addWidget(self._track, 1)
+        n = len(tiers)
+        bar_width = max(20, (rect.width() - (n - 1) * 12) // n)
+        max_count = max(self._data.get(t, 0) for t in tiers) or 1
 
-        # Count label
-        self._count = QLabel(str(count))
-        self._count.setObjectName("tierCount")
-        self._count.setFixedWidth(50)
-        self._count.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self._count.setStyleSheet(f"color:{theme_tokens.TEXT_PRIMARY}; font-size:13px; font-weight:700;")
-        root.addWidget(self._count, 0)
+        x = rect.left()
+        for tier in tiers:
+            count = self._data.get(tier, 0)
+            fraction = count / max_count if max_count > 0 else 0.0
+            bar_height = max(4, int((rect.height() - 20) * fraction))
+            color_str = theme_tokens.TIER_COLORS.get(tier, theme_tokens.TEXT_MUTED)
+            color = QColor(color_str)
 
-        self._set_count(count)
+            # Draw bar with rounded top
+            bar_rect = QRectF(x, rect.bottom() - bar_height, bar_width, bar_height)
+            painter.setBrush(color)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawRoundedRect(bar_rect, 6, 6)
 
-    def set_value(self, count: int, maximum: int | None = None) -> None:
-        if maximum is not None:
-            self._max = maximum
-        self._set_count(count)
+            # Draw count above bar
+            painter.setPen(QColor(theme_tokens.TEXT_PRIMARY))
+            font = painter.font()
+            font.setPointSize(10)
+            font.setBold(True)
+            painter.setFont(font)
+            count_rect = QRectF(x, rect.bottom() - bar_height - 18, bar_width, 16)
+            painter.drawText(count_rect, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom, str(count))
 
-    def _set_count(self, count: int) -> None:
-        fraction = (count / self._max) if self._max > 0 else 0.0
-        track_width = self._track.width()
-        if track_width > 0:
-            fill_width = max(0, int(track_width * fraction))
-            self._fill.setFixedWidth(fill_width)
-            self._fill.setVisible(fraction > 0)
-        else:
-            self._fill.setFixedWidth(0)
-            self._fill.setVisible(False)
-        self._count.setText(str(count))
+            # Draw tier label below bar
+            painter.setPen(QColor(theme_tokens.TEXT_MUTED))
+            font.setPointSize(9)
+            font.setBold(False)
+            painter.setFont(font)
+            label_rect = QRectF(x, rect.bottom() + 4, bar_width, 16)
+            painter.drawText(label_rect, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop, tier)
 
-    def resizeEvent(self, event) -> None:  # noqa: N802
-        super().resizeEvent(event)
-        fraction = (self._count.text().__int__() / self._max) if self._max > 0 else 0.0
-        track_width = self._track.width()
-        if track_width > 0:
-            fill_width = max(0, int(track_width * fraction))
-            self._fill.setFixedWidth(fill_width)
-            self._fill.setVisible(fraction > 0)
+            x += bar_width + 12
 
-    def update_theme(self) -> None:
-        reduce_effects = ThemeManager.instance().reduce_effects
-        tier_bg = tier_color(self._tier) if not reduce_effects else theme_tokens.ACCENT
-        self._label.setStyleSheet(f"color:{tier_bg}; font-size:13px; font-weight:700;")
-        self._fill.setStyleSheet(f"background:{tier_bg}; border-radius:8px;")
-
-
+        # Draw baseline
+        painter.setPen(QPen(QColor(theme_tokens.BORDER), 1))
 class _DonutChart(QFrame):
     """A native QPainter donut chart showing the category split."""
 
@@ -328,9 +314,9 @@ class _DonutChart(QFrame):
         self.setObjectName("donutChart")
         self._data = {}
         self._total = 0
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.setMinimumHeight(160)
-        self.setMaximumHeight(220)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.setMinimumHeight(180)
+        self.setMaximumHeight(300)
         self.setMinimumWidth(0)
 
     def set_data(self, data: dict[str, int]) -> None:
@@ -348,9 +334,9 @@ class _DonutChart(QFrame):
             painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, "No data")
             return
 
-        reduce_effects = ThemeManager.instance().reduce_effects
-        ring_width = 18 if not reduce_effects else 14
-        ring_gap = 4 if not reduce_effects else 2
+        effects_reduced = reduce_effects()
+        ring_width = 18 if not effects_reduced else 14
+        ring_gap = 4 if not effects_reduced else 2
 
         # Draw a ring for each category (outer to inner)
         radius = min(rect.width(), rect.height()) / 2
@@ -368,7 +354,7 @@ class _DonutChart(QFrame):
 
             color_str = _CATEGORY_COLORS.get(category, "#888888")
             color = QColor(color_str)
-            if reduce_effects:
+            if effects_reduced:
                 color = color.darker(120)
 
             pen = QPen(color)
@@ -413,8 +399,8 @@ class _CategoryDistBar(QWidget):
         super().__init__(parent)
         self._data = {}
         self._total = 0
-        self.setFixedHeight(32)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.setMinimumHeight(48)
         self.setMinimumWidth(0)
 
     def set_data(self, data: dict[str, int]) -> None:
@@ -474,7 +460,7 @@ class _MediaCardMini(QFrame):
     def __init__(self, item, parent=None) -> None:
         super().__init__(parent)
         self.setObjectName("miniCard")
-        self.setFixedHeight(72)
+        self.setFixedHeight(96)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setStyleSheet(
             f"#miniCard {{ background:{theme_tokens.BG_PANEL}; border:1px solid {theme_tokens.BORDER};"
@@ -599,8 +585,8 @@ class DashboardPanel(QFrame):
         self._anime_status_rows: dict[str, _BarRow] = {}
         self._literature_status_rows: dict[str, _BarRow] = {}
         self._genre_rows: list[_BarRow] = []
-        self._tier_rows: dict[str, _TierBarRow] = {}
         self._upcoming_cards: list[_MediaCardMini] = []
+        self._height_scale = 1.0
 
         # Main scroll area
         scroll = QScrollArea()
@@ -609,13 +595,21 @@ class DashboardPanel(QFrame):
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        scroll.setMinimumSize(0, 0)
 
         self._content = QWidget()
         self._content.setObjectName("dashboardContent")
         self._content.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self._content.setMinimumHeight(0)
+        self._content.setMinimumWidth(0)
+        # Let the layout's real size hint drive the scroll area's content height.
+        # Overriding minimumSizeHint to (0, 0) collapses the scroll content and
+        # clips otherwise correctly constructed dashboard sections.
         content_layout = QVBoxLayout(self._content)
         content_layout.setContentsMargins(24, 24, 24, 24)
         content_layout.setSpacing(20)
+        content_layout.setSizeConstraint(QVBoxLayout.SizeConstraint.SetNoConstraint)
 
         scroll.setWidget(self._content)
 
@@ -636,9 +630,8 @@ class DashboardPanel(QFrame):
         self._build_recommendations_section(content_layout)
 
         # Connect to theme changes
-        ThemeManager.instance().theme_changed.connect(self._on_theme_changed)
-        ThemeManager.instance().effects_changed.connect(self._on_effects_changed)
-        ThemeManager.instance().liquid_glass_changed.connect(self._on_liquid_glass_changed)
+        # Theme-change signals are retired: the design system is single-palette.
+        # Reduce Effects / Liquid Glass are read directly from QSettings below.
 
     def _build_header(self, root: QVBoxLayout, view: str = "overview") -> None:
         header = QWidget()
@@ -695,6 +688,41 @@ class DashboardPanel(QFrame):
         )
         layout.addWidget(subtitle, 1)
 
+        # ── Slider controls: Reduce Effects + Chart Height ───────────────────
+        self._effects_slider = QSlider(Qt.Orientation.Horizontal)
+        self._effects_slider.setObjectName("effectsSlider")
+        self._effects_slider.setMinimum(0)
+        self._effects_slider.setMaximum(100)
+        self._effects_slider.setValue(0)
+        self._effects_slider.setToolTip("Reduce visual effects (glass / neumorphism depth)")
+        self._effects_slider.valueChanged.connect(self._on_effects_slider_changed)
+
+        self._effects_slider_label = _ElidingLabel("Reduce Effects 0%")
+        self._effects_slider_label.setObjectName("sliderLabel")
+        self._effects_slider_label.setStyleSheet(
+            f"color:{theme_tokens.TEXT_MUTED}; font-size:12px;"
+        )
+
+        self._height_slider = QSlider(Qt.Orientation.Horizontal)
+        self._height_slider.setObjectName("heightSlider")
+        self._height_slider.setMinimum(0)
+        self._height_slider.setMaximum(200)
+        self._height_slider.setValue(100)
+        self._height_slider.setToolTip("Chart panel height")
+        self._height_slider.valueChanged.connect(self._on_height_slider_changed)
+
+        self._height_slider_label = _ElidingLabel("Chart Height 100%")
+        self._height_slider_label.setObjectName("sliderLabel")
+        self._height_slider_label.setStyleSheet(
+            f"color:{theme_tokens.TEXT_MUTED}; font-size:12px;"
+        )
+
+        layout.addWidget(self._effects_slider, 0)
+        layout.addWidget(self._effects_slider_label, 0)
+        layout.addWidget(self._height_slider, 0)
+        layout.addWidget(self._height_slider_label, 0)
+        layout.addStretch(1)
+
         self._refresh_btn = QPushButton("Refresh")
         self._refresh_btn.setObjectName("primaryButton")
         self._refresh_btn.setFixedHeight(36)
@@ -705,6 +733,8 @@ class DashboardPanel(QFrame):
         self._last_updated = QLabel("Last updated: just now")
         self._last_updated.setStyleSheet(f"color:{theme_tokens.TEXT_MUTED}; font-size:11px;")
         layout.addWidget(self._last_updated, 0)
+
+        self._header = header
 
         root.addWidget(header)
 
@@ -812,21 +842,41 @@ class DashboardPanel(QFrame):
         root.addWidget(frame, 1)
 
     def _build_tier_distribution(self, root: QVBoxLayout) -> None:
-        """Major visual priority: horizontal tier distribution bars."""
+        """Major visual priority: vertical tier distribution chart."""
         frame, frame_layout = _panel("Tier Distribution")
 
-        self._tier_container = QWidget()
-        self._tier_layout = QVBoxLayout(self._tier_container)
-        self._tier_layout.setContentsMargins(0, 0, 0, 0)
-        self._tier_layout.setSpacing(6)
+        self._tier_chart = _VerticalTierChart()
+        self._tier_chart.setStyleSheet(
+            f"background:{theme_tokens.BG_PANEL}; border-radius:12px; "
+            f"border:1px solid {theme_tokens.BORDER};"
+        )
+        frame_layout.addWidget(self._tier_chart, 0)
 
-        # Create rows for all tiers (SSS to F)
-        for tier in TIERS:
-            row = _TierBarRow(tier, 0, 1)
-            self._tier_rows[tier] = row
-            self._tier_layout.addWidget(row, 0)
+        # Legend below chart
+        self._tier_legend = QWidget()
+        legend_layout = QGridLayout(self._tier_legend)
+        legend_layout.setContentsMargins(8, 8, 8, 8)
+        legend_layout.setSpacing(8)
 
-        frame_layout.addWidget(self._tier_container)
+        self._tier_legend_labels = {}
+        for i, tier in enumerate(TIERS):
+            color = theme_tokens.TIER_COLORS.get(tier, theme_tokens.TEXT_MUTED)
+            # Color swatch
+            swatch = QLabel()
+            swatch.setFixedSize(16, 16)
+            swatch.setStyleSheet(f"background:{color}; border-radius:4px;")
+            legend_layout.addWidget(swatch, i // 3, (i % 3) * 3)
+            # Tier name
+            name_label = QLabel(tier)
+            name_label.setStyleSheet(f"color:{color}; font-size:12px; font-weight:700;")
+            legend_layout.addWidget(name_label, i // 3, (i % 3) * 3 + 1)
+            # Count
+            count_label = QLabel("0")
+            count_label.setStyleSheet(f"color:{theme_tokens.TEXT_MUTED}; font-size:11px;")
+            legend_layout.addWidget(count_label, i // 3, (i % 3) * 3 + 2)
+            self._tier_legend_labels[tier] = count_label
+
+        frame_layout.addWidget(self._tier_legend, 0)
         root.addWidget(frame, 1)
 
     def _build_genre_distribution(self, root: QVBoxLayout) -> None:
@@ -880,22 +930,55 @@ class DashboardPanel(QFrame):
         placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._rec_layout.addWidget(placeholder)
 
+        open_btn = QPushButton("Open Recommendations")
+        open_btn.clicked.connect(self._open_recommendation_dialog)
+        self._rec_layout.addWidget(open_btn)
+
         frame_layout.addWidget(self._rec_container)
         root.addWidget(frame, 0)
 
-    def _on_theme_changed(self, theme_id: str) -> None:
-        self._refresh_styles()
-        self.apply_theme()
+    def _open_recommendation_dialog(self) -> None:
+        from animevault.ui.recommendation_dialog import RecommendationDialog
+
+        animes = getattr(self, "_animes", None)
+        if animes is None:
+            try:
+                from animevault.models.anime import Anime
+                animes = Anime.all()
+            except Exception:
+                animes = []
+        dlg = RecommendationDialog(self, library_items=animes)
+        dlg.exec()
+
 
     def _on_effects_changed(self, enabled: bool) -> None:
         self._refresh_styles()
-        for row in self._tier_rows.values():
-            row.update_theme()
+        if hasattr(self, "_tier_chart"):
+            self._tier_chart.update()
 
     def _on_liquid_glass_changed(self, enabled: bool) -> None:
         self._refresh_styles()
-        for row in self._tier_rows.values():
-            row.update_theme()
+        if hasattr(self, "_tier_chart"):
+            self._tier_chart.update()
+
+    def _on_effects_slider_changed(self, value: int) -> None:
+        self._on_effects_changed(bool(value))
+        set_reduce_effects(bool(value))
+
+    def _on_height_slider_changed(self, value: int) -> None:
+        self._height_scale = (value + 100) / 200.0
+        self._apply_height_scale()
+
+    def _apply_height_scale(self) -> None:
+        factor = self._height_scale
+        if hasattr(self, "_donut"):
+            self._donut.setMinimumHeight(max(50, int(180 * factor)))
+            self._donut.setMaximumHeight(int(300 * factor))
+        if hasattr(self, "_tier_chart"):
+            self._tier_chart.setMinimumHeight(int(280 * factor))
+            self._tier_chart.setMaximumHeight(int(360 * factor))
+        if hasattr(self, "_cat_dist_bar"):
+            self._cat_dist_bar.setMinimumHeight(int(48 * factor))
 
     def _switch_view(self, view: str) -> None:
         """Switch between the five dashboard views."""
@@ -997,14 +1080,11 @@ class DashboardPanel(QFrame):
         for label in self._category_count_labels.values():
             label.setStyleSheet(f"color:{theme_tokens.TEXT_SECONDARY}; font-size:11px; font-weight:500;")
 
-    def apply_theme(self) -> None:
-        """Public method to refresh theme-dependent styles."""
-        self._refresh_styles()
-        self._donut.update()
-        self._cat_dist_bar.update()
 
     def refresh(self, animes: list, literature: list) -> None:
         """Update all dashboard components with fresh data."""
+        self._animes = list(animes or [])
+        self._literature = list(literature or [])
         from datetime import datetime
 
         self._last_updated.setText(f"Last updated: {datetime.now().strftime('%H:%M:%S')}")
@@ -1080,10 +1160,19 @@ class DashboardPanel(QFrame):
                 tier_counter[item.tier.upper()] += 1
 
         maximum = max(tier_counter.values()) if tier_counter else 1
+        # Update vertical chart
+        chart_data = {}
         for tier in TIERS:
             count = tier_counter.get(tier, 0)
-            row = self._tier_rows[tier]
-            row.set_value(count, maximum)
+            chart_data[tier] = count
+        self._tier_chart.set_data(chart_data)
+        # Update legend counts
+        for tier in TIERS:
+            count = tier_counter.get(tier, 0)
+            tier_total = sum(tier_counter.values()) or 1
+            pct = (count / tier_total * 100) if tier_total > 0 else 0
+            if tier in self._tier_legend_labels:
+                self._tier_legend_labels[tier].setText(f"{count} ({pct:.0f}%)")
 
         # Up Next - In Progress
         self._clear(self._upcoming_layout)
@@ -1178,6 +1267,8 @@ class DashboardPanel(QFrame):
         rec_placeholder.setStyleSheet(f"color:{theme_tokens.TEXT_MUTED}; font-size:12px; padding:24px;")
         rec_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._rec_layout.addWidget(rec_placeholder)
+
+        self._apply_height_scale()
 
     @staticmethod
     def _clear(layout: QVBoxLayout | QHBoxLayout) -> None:

@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from typing import Iterable, Optional
 
 from animevault.models.anime import Anime
+from .title_norm import normalize_title
 
 # ── Weight constants (overridable per profile) ───────────────────────
 
@@ -108,6 +109,8 @@ class UserProfile:
     metadata_weights: dict[str, float] = field(default_factory=dict)
     watch_engagement: float = 0.0
     profile_doc: list[str] = field(default_factory=list)
+    negative_genre_weights: dict[str, float] = field(default_factory=dict)
+    format_weights: dict[str, float] = field(default_factory=dict)
 
     # ── Convenience accessors ──────────────────────────────────────
 
@@ -128,14 +131,27 @@ class UserProfile:
         )[:n]
 
     def has_preferences(self) -> bool:
-        """Return True when enough signals exist to make recommendations."""
+        """Return True when user activity provides usable recommendation signals.
+
+        Unweighted metadata and Plan to Watch genres alone are not evidence of
+        preference; signed activity, ratings, favorites, tiers, or progress are.
+        """
         sv = self.signal_values
-        return (
+        if sv is None:
+            return False
+        # Explicit user preferences
+        if (
             (sv.score_avg > 0 or len(sv.ratings) > 0)
             or len(sv.favorites) > 0
             or len(sv.tier_placed) > 0
             or (sv.episodes_watched > 0)
-        )
+            or (sv.completed_count > 0)
+            or (sv.dropped_count > 0)
+        ):
+            return True
+        # Genre counts from Plan to Watch are metadata, not positive evidence.
+        # Only signed activity-weighted genre evidence makes the fallback profile usable.
+        return bool(self.genre_weights or self.negative_genre_weights)
 
 
 # ── Small text helpers ───────────────────────────────────────────────
@@ -213,36 +229,72 @@ def _compute_watch_history(anime_items: Iterable[Anime]) -> tuple[int, int, int,
     return episodes_watched, total_episodes, completed, dropped, plan, progress
 
 
+def _activity_signal(item) -> float:
+    """Signed preference evidence, with plan-to-watch entries neutral."""
+    status = str(getattr(item, "status", "plan_to_watch") or "plan_to_watch").casefold().replace(" ", "_")
+    tier = str(getattr(item, "tier", "") or "").strip().upper()
+    tier_signal = {"SSS": 1.0, "SS": 0.95, "S": 0.9, "A": 0.75, "B": 0.55, "C": 0.3, "D": 0.1, "E": -0.15, "F": -0.35}.get(tier)
+    score = getattr(item, "score", None)
+    rated = isinstance(score, (int, float)) and not isinstance(score, bool) and 0 <= float(score) <= 10
+    rating_signal = (float(score) - 5.0) / 5.0 if rated else None
+    status_signal = {"completed": 0.45, "watching": 0.35, "on_hold": 0.1, "dropped": -0.8, "plan_to_watch": 0.0}.get(status, 0.0)
+    if status == "plan_to_watch":
+        signal = 0.0
+    elif tier_signal is not None and status == "completed":
+        signal = tier_signal
+    elif rating_signal is not None:
+        signal = 0.65 * rating_signal + 0.35 * status_signal
+    else:
+        signal = status_signal
+    if getattr(item, "favorite", False):
+        signal += 0.35
+    return max(-1.0, min(1.0, signal))
+
+
+def _deduplicate_library(items: Iterable[Anime]) -> list[Anime]:
+    """Count each work once, retaining its strongest signed activity signal."""
+    unique: dict[tuple, Anime] = {}
+    for item in items:
+        key = None
+        for attr in ("anilist_id", "mal_id", "tmdb_id"):
+            value = getattr(item, attr, None)
+            if value:
+                key = (attr, str(value))
+                break
+        if key is None and getattr(item, "kitsu_id", None):
+            key = ("kitsu_id", str(item.kitsu_id))
+        if key is None:
+            key = (
+                "title",
+                normalize_title(str(getattr(item, "title", ""))),
+                str(getattr(item, "media_type", "") or "").casefold(),
+            )
+        previous = unique.get(key)
+        if previous is None or abs(_activity_signal(item)) > abs(_activity_signal(previous)):
+            unique[key] = item
+    return list(unique.values())
+
+
+def _scale_positive(values: dict[str, float]) -> dict[str, float]:
+    maximum = max((value for value in values.values() if value > 0), default=0.0)
+    return {key: min(1.0, value / maximum) for key, value in values.items() if value > 0} if maximum else {}
+
+
 def _compute_genre_affinity(anime_items: Iterable[Anime]) -> dict[str, float]:
-    genre_hits: dict[str, int] = {}
-    genre_ratings: dict[str, list[float]] = {}
+    """Normalize observed genre frequency, independent of missing ratings."""
+    counts: dict[str, float] = {}
     for item in anime_items:
-        genres = list(getattr(item, "genres", []) or [])
-        score = getattr(item, "score", None)
-        rating = float(score) if isinstance(score, (int, float)) and 0.0 <= float(score) <= 10.0 else None
-        for g in genres:
-            g = g.strip()
-            if not g:
-                continue
-            genre_hits[g] = genre_hits.get(g, 0) + 1
-            genre_ratings.setdefault(g, [])
-            if rating is not None:
-                genre_ratings[g].append(rating)
-    affinity: dict[str, float] = {}
-    total = 0
-    for g, hits in genre_hits.items():
-        ratings = genre_ratings.get(g, [])
-        avg = sum(ratings) / len(ratings) if ratings else 0.0
-        affinity[g] = avg * (hits ** 0.75)
-        total += affinity[g]
-    if total > 0:
-        affinity = {g: v / total for g, v in affinity.items()}
-    return affinity
+        genres = {str(g).strip() for g in (getattr(item, "genres", []) or []) if str(g).strip()}
+        for genre in genres:
+            counts[genre] = counts.get(genre, 0.0) + 1.0 / max(1.0, len(genres) ** 0.5)
+    total = sum(counts.values())
+    return {genre: value / total for genre, value in counts.items()} if total else {}
+
 
 
 def analyze_preferences(anime_items: Iterable[Anime]) -> UserProfile:
     """Compute a complete preference profile from a list of ~Anime~ objects."""
-    items = list(anime_items)
+    items = _deduplicate_library(anime_items)
     if not items:
         return UserProfile(SignalValues(ratings=[], score_avg=0.0,
                                          per_genre_ratings={}, per_genre_avg={},
@@ -260,13 +312,40 @@ def analyze_preferences(anime_items: Iterable[Anime]) -> UserProfile:
     favorites = _compute_favorites(items)
     episodes_watched, total_episodes, completed, dropped, plan, progress = _compute_watch_history(items)
     genre_affinity = _compute_genre_affinity(items)
+    positive_genres: dict[str, float] = {}
+    negative_genres: dict[str, float] = {}
+    studio_affinity: dict[str, float] = {}
+    format_affinity: dict[str, float] = {}
+    per_genre_ratings: dict[str, list[float]] = {}
+    for item in items:
+        signal = _activity_signal(item)
+        genres = {str(g).strip() for g in (getattr(item, "genres", []) or []) if str(g).strip()}
+        target = positive_genres if signal >= 0 else negative_genres
+        for genre in genres:
+            key = genre.casefold()
+            target[key] = target.get(key, 0.0) + abs(signal) / max(1.0, len(genres) ** 0.5)
+            score = getattr(item, "score", None)
+            if isinstance(score, (int, float)) and not isinstance(score, bool) and 0 <= float(score) <= 10:
+                per_genre_ratings.setdefault(genre, []).append(float(score))
+        if signal > 0:
+            for studio in getattr(item, "studios", []) or []:
+                studio = str(studio).strip()
+                if studio:
+                    studio_affinity[studio] = studio_affinity.get(studio, 0.0) + signal
+            media_format = str(getattr(item, "media_type", "") or "").strip().upper()
+            if media_format:
+                format_affinity[media_format] = format_affinity.get(media_format, 0.0) + signal
+    genre_weights = _scale_positive(positive_genres)
+    negative_genre_weights = _scale_positive(negative_genres)
+    format_weights = _scale_positive(format_affinity)
+    metadata_weights = _scale_positive(studio_affinity)
+    per_genre_avg = {g: sum(values) / len(values) for g, values in per_genre_ratings.items() if values}
 
-    # Build SignalValues in a single call (frozen dataclass).
     sv = SignalValues(
         ratings=ratings,
         score_avg=score_avg,
-        per_genre_ratings={},
-        per_genre_avg={},
+        per_genre_ratings=per_genre_ratings,
+        per_genre_avg=per_genre_avg,
         tier_placed=tier_placed,
         tier_by_genre={},
         favorites=favorites,
@@ -281,28 +360,21 @@ def analyze_preferences(anime_items: Iterable[Anime]) -> UserProfile:
         metadata_count=0,
     )
 
-    # Build weighted profile.
-    # Genre weights: prefer genres with high average rating + high hits.
-    genre_weights: dict[str, float] = {}
-    for g, avg in genre_affinity.items():
-        genre_weights[g] = avg * 0.6 + 0.05
-
     # Tier weights: map each placed tier to its engagement strength.
     tier_weights: dict[str, float] = {}
     for t in tier_placed:
-        tier_weights[t] = _CUSTOM_TIER_RANK[t] * 0.1
+        tier_items = [item for item in items if str(getattr(item, "tier", "") or "").upper() == t]
+        tier_weights[t] = sum(max(0.0, _activity_signal(item)) for item in tier_items)
 
     # Favorite signal: extra multiplier for favourites.
     favorite_signal = 1.0 + min(2.0, len(favorites) * 0.15)
 
-    # Metadata weights: use genre association is not directly available;
-    # fall back to a simple count of metadata.
-    metadata_weights: dict[str, float] = {}
 
-    # Watch engagement: use completion ratio.
+    # Watch engagement: use completion ratio, clamped to [0, 1] so that
+    # rewatched/extended episodes never inflate engagement above 100%.
     watch_engagement = 0.0
     if total_episodes > 0:
-        watch_engagement = episodes_watched / total_episodes
+        watch_engagement = min(1.0, episodes_watched / total_episodes)
 
     # Profile document for TF-IDF semantic similarity.
     profile_doc: list[str] = []
@@ -321,42 +393,7 @@ def analyze_preferences(anime_items: Iterable[Anime]) -> UserProfile:
         metadata_weights=metadata_weights,
         watch_engagement=watch_engagement,
         profile_doc=profile_doc,
+        negative_genre_weights=negative_genre_weights,
+        format_weights=format_weights,
     )
-
-    # Genre affinity
-    genre_affinity = _compute_genre_affinity(items)
-    sv.genre_affinity = genre_affinity
-
-    # ── Build weighted profile ──────────────────────────────────────
-
-    # Genre weights: prefer genres with high average rating + high hits.
-    genre_weights: dict[str, float] = {}
-    for g, avg in sv.genre_affinity.items():
-        genre_weights[g] = avg * 0.6 + 0.05
-
-    # Tier weights: map each placed tier to its engagement strength.
-    tier_weights: dict[str, float] = {}
-    for t in sv.tier_placed:
-        tier_weights[t] = _CUSTOM_TIER_RANK[t] * 0.1
-
-    # Favorite signal: extra multiplier for favourites.
-    favorite_signal = 1.0 + min(2.0, len(sv.favorites) * 0.15)
-
-    # Metadata weights (studios, authors, artists) from genre association is
-    # not directly available; fall back to a simple count of metadata.
-    metadata_weights: dict[str, float] = {}
-
-    # Watch engagement: use completion ratio.
-    watch_engagement = 0.0
-    if sv.total_episodes > 0:
-        watch_engagement = sv.episodes_watched / sv.total_episodes
-
-    # Profile document for TF-IDF semantic similarity.
-    profile_doc: list[str] = []
-    for item in items:
-        parts = list(getattr(item, "genres", []) or [])
-        synopsis = str(getattr(item, "synopsis", "") or "")
-        if synopsis.strip():
-            parts.append(synopsis)
-        profile_doc.append(_norm(" ".join(parts)))
 

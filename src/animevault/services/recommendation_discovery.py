@@ -17,11 +17,12 @@ from animevault.services.providers.anilist import AniListProvider
 from animevault.services.providers.jikan import JikanProvider
 from animevault.services.providers.kitsu import KitsuProvider
 from animevault.services.providers.tmdb import TmdbProvider
+from animevault.services.title_norm import normalize_title
 
 logger = logging.getLogger(__name__)
 
 # Providers that return full metadata (search + details).
-_FULL_METADATA_PROVIDERS = (AniListProvider, KitsuProvider, TmdbProvider, JikanProvider)
+_FULL_METADATA_PROVIDERS = ("anilist", "kitsu", "tmdb", "jikan")
 
 # Cache of discovered candidate titles per provider; avoids re-fetching.
 _discovery_cache: dict[str, dict[str, AnimeMetadata]] = {}
@@ -59,8 +60,12 @@ class Candidate:
     anilist_id: int = 0
     kitsu_id: str = ""
     tmdb_id: int = 0
+    episodes: int = 0
     is_plan_to_watch: bool = False
     discovery_source: str = ""
+    recommendation_signal: float = 0.0
+    recommendation_reasons: list[str] = field(default_factory=list)
+    is_cached: bool = False
 
 
 def _provider_search(provider: BaseProvider, query: str, limit: int = 10) -> list[AnimeMetadata]:
@@ -124,25 +129,46 @@ def discover_candidates(
                 anilist_id=meta.anilist_id or 0,
                 kitsu_id=meta.kitsu_id or "",
                 tmdb_id=meta.tmdb_id or 0,
+                episodes=meta.episodes or 0,
                 discovery_source=pname,
             )
-            key = candidate.item_id or hash((candidate.title, candidate.poster_url))
-            if key not in seen_ids:
-                seen_ids.add(key)
-                candidates.append(candidate)
-
-    # Deduplicate by title (case-insensitive) across all providers.
-    seen_titles: set[str] = set()
+    # Deduplicate by a stable provider identifier when one is available.
+    # Otherwise fall back to a normalized title + media type.  Two records with
+    # different provider identifiers (e.g. one from Anilist and one from Kitsu)
+    # are kept separate even when their titles are identical.  Media type is
+    # part of the fallback key so that a TV and a Movie with the same title
+    # remain distinct works.
+    seen_keys: set = set()
     dedup: list[Candidate] = []
     for c in candidates:
-        title_key = c.title.strip().lower()
-        if title_key and title_key in seen_titles:
+        key = _candidate_key(c)
+        if key in seen_keys:
             continue
-        if title_key:
-            seen_titles.add(title_key)
+        seen_keys.add(key)
         dedup.append(c)
 
     return dedup[:limit]
+
+
+def _candidate_key(candidate: Candidate) -> tuple:
+    """Deduplication key for a discovered candidate.
+
+    A stable provider identifier (AniList, MAL, TMDb, then Kitsu) is preferred.
+    When a candidate carries no reliable identifier, a normalized title + media
+    type is used so that distinct works are never merged solely because their
+    titles are similar or identical.
+    """
+    for attr in ("anilist_id", "mal_id", "tmdb_id"):
+        value = getattr(candidate, attr, None)
+        if value:
+            try:
+                return ("provider", attr, int(value), str(candidate.media_type or "").lower())
+            except (TypeError, ValueError):
+                continue
+    kitsu = getattr(candidate, "kitsu_id", None)
+    if kitsu:
+        return ("provider", "kitsu_id", str(kitsu), str(candidate.media_type or "").lower())
+    return ("title", normalize_title(candidate.title), str(candidate.media_type or "").lower())
 
 
 def search_by_title(

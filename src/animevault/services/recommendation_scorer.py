@@ -43,12 +43,15 @@ from animevault.services.anime_similarity import (
 # ── Default weights (validated against actual recommendation results) ─
 
 DEFAULT_WEIGHTS = {
-    "genre_theme_similarity": 0.25,
-    "similarity_to_highly_rated": 0.25,
-    "tier_placement": 0.15,
-    "favorite_status": 0.15,
+    "genre_theme_similarity": 0.20,
+    "similarity_to_highly_rated": 0.20,
+    "tier_placement": 0.10,
+    "favorite_status": 0.10,
     "watch_engagement": 0.10,
-    "metadata_similarity": 0.10,
+    "metadata_similarity": 0.05,
+    "format_preference": 0.05,
+    "negative_preference": 0.10,
+    "jikan_relationship": 0.10,
 }
 
 
@@ -70,6 +73,11 @@ class Recommendation:
     is_new_discovery: bool = False
     is_similar: bool = False
     discovery_source: str = ""
+    title_ja: str = ""
+    episodes: int = 0
+    provider_key: str = ""
+    provider_id: str = ""
+    is_cached: bool = False
 
 
 @dataclass(frozen=True)
@@ -83,6 +91,8 @@ class RankingCandidate:
     is_new_discovery: bool = False
     is_similar: bool = False
     discovery_source: str = ""
+    recommendation_signal: float = 0.0
+    recommendation_reasons: list[str] = field(default_factory=list)
 
 
 # ── Helper: clamp and normalise ──────────────────────────────────────
@@ -209,7 +219,24 @@ class RecommendationScorer:
         meta_similarity = self._metadata_similarity(item, candidate)
         score += w["metadata_similarity"] * meta_similarity
         if meta_similarity > 0.1:
-            reasons.append("Similar studios and creators")
+            reasons.append("Matches studios in your positively rated library")
+
+        media_format = str(getattr(item, "media_type", "") or "").strip().upper()
+        format_match = getattr(self.profile, "format_weights", {}).get(media_format, 0.0)
+        score += w["format_preference"] * format_match
+        if format_match > 0:
+            reasons.append(f"Matches your preferred {media_format} format")
+
+        negative = getattr(self.profile, "negative_genre_weights", {}) or {}
+        candidate_genres = {str(g).strip().casefold() for g in (getattr(item, "genres", []) or [])}
+        negative_match = max((weight for genre, weight in negative.items() if genre.casefold() in candidate_genres), default=0.0)
+        score -= w["negative_preference"] * negative_match
+        if negative_match > 0.25:
+            reasons.append("Down-ranked for genres linked to dropped or low-rated titles")
+
+        score += w["jikan_relationship"] * max(0.0, min(1.0, candidate.recommendation_signal))
+        if candidate.recommendation_reasons:
+            reasons.extend(candidate.recommendation_reasons)
 
         return _clamp01(score), reasons
 
@@ -241,20 +268,17 @@ class RecommendationScorer:
         return candidate.similarity.metadata
 
     def _metadata_similarity(self, item, candidate: RankingCandidate) -> float:
-        """Similarity to the candidate's studios / authors / artists."""
-        other = candidate.item
-        ga = set(str(g).strip().lower() for g in (getattr(item, "genres", []) or []) if g)
-        gb = set(str(g).strip().lower() for g in (getattr(other, "genres", []) or []) if g)
-        st = set(str(s).strip().lower() for s in (getattr(item, "studios", []) or []) if s)
-        ob = set(str(s).strip().lower() for s in (getattr(other, "studios", []) or []) if s)
-        au = set(str(a).strip().lower() for a in (getattr(item, "authors", []) or []) if a)
-        ob2 = set(str(a).strip().lower() for a in (getattr(other, "authors", []) or []) if a)
-        ar = set(str(a).strip().lower() for a in (getattr(item, "artists", []) or []) if a)
-        ob3 = set(str(a).strip().lower() for a in (getattr(other, "artists", []) or []) if a)
-        all_a = ga | gb | st | ob | au | ob2 | ar | ob3
-        if not all_a:
+        """Weighted overlap with studios observed in positive library entries."""
+        preferred = {
+            str(studio).strip().casefold(): float(weight)
+            for studio, weight in (getattr(self.profile, "metadata_weights", {}) or {}).items()
+        }
+        studios = {str(studio).strip().casefold() for studio in (getattr(item, "studios", []) or [])}
+        denominator = sum(preferred.values())
+        if not denominator or not studios:
             return 0.0
-        return (len(ga & gb) + len(st & ob) + len(au & ob2) + len(ar & ob3)) / len(all_a)
+        return min(1.0, sum(weight for studio, weight in preferred.items() if studio in studios) / denominator)
+
 
     def rank_candidates(
         self,
@@ -270,8 +294,21 @@ class RecommendationScorer:
         scored: list[tuple[float, Recommendation]] = []
         for cand in candidates:
             score, reasons = self.score_candidate(cand, profile_genre_weights)
+            progress_percent = getattr(cand.item, "progress_percent", 0)
+            # Anime stores progress as a value while Literature exposes it as
+            # a zero-argument method. Resolve either shape before conversion.
+            if callable(progress_percent):
+                progress_percent = progress_percent()
+            provider_key = ""
+            provider_id = ""
+            for provider_attr in ("anilist_id", "mal_id", "tmdb_id", "kitsu_id"):
+                provider_value = getattr(cand.item, provider_attr, None)
+                if provider_value:
+                    provider_key = provider_attr
+                    provider_id = str(provider_value)
+                    break
             rec = Recommendation(
-                item_id=cand.item.id,
+                item_id=getattr(cand.item, "id", None) or getattr(cand.item, "item_id", 0),
                 title=str(getattr(cand.item, "title", "Untitled")),
                 media_type=str(getattr(cand.item, "media_type", "")),
                 category=cand.category,
@@ -281,12 +318,17 @@ class RecommendationScorer:
                 reasons=reasons,
                 poster_url=str(getattr(cand.item, "poster_url", "")),
                 progress=str(getattr(cand.item, "progress", "")),
-                progress_percent=int(getattr(cand.item, "progress_percent", 0) or 0),
+                progress_percent=int(progress_percent or 0),
                 tier=getattr(cand.item, "tier", None),
                 is_plan_to_watch=cand.is_plan_to_watch,
                 is_new_discovery=cand.is_new_discovery,
                 is_similar=cand.is_similar,
                 discovery_source=cand.discovery_source,
+                title_ja=str(getattr(cand.item, "title_ja", "") or ""),
+                episodes=int(getattr(cand.item, "episodes", 0) or 0),
+                provider_key=provider_key,
+                provider_id=provider_id,
+                is_cached=bool(getattr(cand.item, "is_cached", False)),
             )
             scored.append((score, rec))
 

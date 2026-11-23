@@ -22,7 +22,6 @@ from animevault.ui.card_grid import CardGrid  # noqa: E402
 from animevault.ui.theme import (  # noqa: E402
     ACCENT,
     BG_DEEP,
-    build_stylesheet,
     status_colors,
     tier_badge_style,
     tier_color,
@@ -33,7 +32,6 @@ from animevault.ui.dashboard_panel import _KPICard  # noqa: E402
 @pytest.fixture(scope="module")
 def qt_app():
     app = QApplication.instance() or QApplication([])
-    app.setStyleSheet(build_stylesheet())
     return app
 
 
@@ -42,11 +40,6 @@ def labels_of(widget) -> list[str]:
 
 
 class TestTheme:
-    def test_stylesheet_contains_palette(self):
-        css = build_stylesheet()
-        assert BG_DEEP in css
-        assert ACCENT in css
-
     def test_tier_colours_span_the_scale(self):
         # SSS is gold, F is grey — visually distinct ends.
         assert tier_color("SSS") != tier_color("F")
@@ -418,56 +411,48 @@ class TestDashboardNavigation:
         assert len(kpis) >= 6, "must have at least 6 KPI cards"
 
 
-class TestLiquidGlass:
-    def test_theme_manager_liquid_glass_default_off(self, reset_theme_manager):
-        from animevault.ui.theme import ThemeManager
-        manager = ThemeManager.instance()
-        assert manager.liquid_glass is False
+class TestAppearancePreferences:
+    def test_liquid_glass_default_off(self):
+        from animevault.ui.theme import liquid_glass
 
-    def test_theme_manager_set_liquid_glass(self, reset_theme_manager):
-        from animevault.ui.theme import ThemeManager
-        manager = ThemeManager.instance()
-        manager.set_liquid_glass(True)
-        assert manager.liquid_glass is True
-        manager.set_liquid_glass(False)
-        assert manager.liquid_glass is False
+        assert liquid_glass() is False
 
-    def test_liquid_glass_persisted_in_settings(self, reset_theme_manager):
-        from animevault.ui.theme import ThemeManager
-        manager = ThemeManager.instance()
-        manager.set_liquid_glass(True)
-        # Read directly from QSettings
-        val = manager.settings.value("appearance/liquid_glass", False, type=bool)
-        assert val is True
+    def test_liquid_glass_toggle_persisted(self):
+        from animevault.ui.theme import liquid_glass, set_liquid_glass
 
-    def test_liquid_glass_changed_signal(self, reset_theme_manager):
-        from animevault.ui.theme import ThemeManager
-        manager = ThemeManager.instance()
-        emitted = []
-        manager.liquid_glass_changed.connect(lambda v: emitted.append(v))
-        manager.set_liquid_glass(True)
-        assert emitted == [True]
+        set_liquid_glass(True)
+        assert liquid_glass() is True
+        set_liquid_glass(False)
+        assert liquid_glass() is False
 
-    def test_theme_dialog_has_effects_combo(self, qt_app, reset_theme_manager):
+    def test_reduce_effects_default_off_and_persisted(self):
+        from animevault.ui.theme import reduce_effects, set_reduce_effects
+
+        assert reduce_effects() is False
+        set_reduce_effects(True)
+        assert reduce_effects() is True
+        set_reduce_effects(False)
+        assert reduce_effects() is False
+
+class TestThemeDialog:
+    def test_theme_dialog_has_effects_combo(self, qt_app):
         from animevault.ui.theme_dialog import ThemeSettingsDialog
-        from animevault.ui.theme import ThemeManager
-        manager = ThemeManager.instance()
-        dialog = ThemeSettingsDialog(manager=manager)
+
+        dialog = ThemeSettingsDialog()
         combo = dialog.findChild(QComboBox)
         assert combo is not None, "theme dialog must have a QComboBox for effects"
         assert combo.count() == 2
         assert combo.itemText(0) == "Standard"
         assert combo.itemText(1) == "3D Liquid Glass"
+        dialog.close()
 
-    def test_theme_dialog_combo_reflects_state(self, qt_app, reset_theme_manager):
+    def test_theme_dialog_combo_reflects_state(self, qt_app):
+        from animevault.ui.theme import set_liquid_glass
         from animevault.ui.theme_dialog import ThemeSettingsDialog
-        from animevault.ui.theme import ThemeManager
-        manager = ThemeManager.instance()
-        manager.set_liquid_glass(True)
-        dialog = ThemeSettingsDialog(manager=manager)
+
+        set_liquid_glass(True)
+        dialog = ThemeSettingsDialog()
         combo = dialog.findChild(QComboBox)
         assert combo.currentIndex() == 1
-
-    def test_build_stylesheet_contains_liquid_glass(self):
-        css = build_stylesheet()
-        assert "liquid-glass" in css.lower() or "liquid_glass" in css.lower()
+        dialog.close()
+        set_liquid_glass(False)

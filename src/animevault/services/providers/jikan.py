@@ -179,10 +179,46 @@ class JikanProvider(BaseProvider):
                 logger.debug("Jikan: skipping malformed entry: %s", exc)
         return results
 
+    def _get_with_retry(self, url: str, attempts: int = 3) -> dict:
+        """Throttle and retry only temporary Jikan failures with bounded backoff."""
+        for attempt in range(max(1, attempts)):
+            self._throttle()
+            try:
+                payload = _jikan_get(url)
+                if not isinstance(payload, dict):
+                    raise ProviderError("Jikan returned an invalid response", retryable=False, provider="jikan")
+                return payload
+            except ProviderError as exc:
+                if not exc.retryable or attempt + 1 >= attempts:
+                    raise
+                delay = exc.retry_after if exc.retry_after is not None else 0.75 * (2 ** attempt)
+                time.sleep(min(15.0, max(0.5, float(delay))))
+        return {}
+
+    def get_recommendations(self, mal_id: int, limit: int = 10) -> list[tuple[AnimeMetadata, int]]:
+        """Return MAL recommendation relationships with their community votes."""
+        data = self._get_with_retry(f"{_BASE_URL}/anime/{int(mal_id)}/recommendations")
+        entries = data.get("data")
+        if not isinstance(entries, list):
+            return []
+        results: list[tuple[AnimeMetadata, int]] = []
+        for relation in entries:
+            if not isinstance(relation, dict) or not isinstance(relation.get("entry"), dict):
+                continue
+            try:
+                entry = relation["entry"]
+                meta = normalize_entry(entry)
+                if not meta.mal_id:
+                    meta.mal_id = int(entry.get("mal_id") or 0) or None
+                votes = int(relation.get("votes") or 0)
+                results.append((meta, max(0, votes)))
+            except (TypeError, ValueError, AttributeError) as exc:
+                logger.debug("Jikan: skipping malformed recommendation record: %s", exc)
+        return sorted(results, key=lambda pair: pair[1], reverse=True)[:max(1, min(int(limit), 25))]
+
     def get_details(self, provider_id: str) -> AnimeMetadata:
-        self._throttle()
         url = f"{_BASE_URL}/anime/{provider_id}/full"
-        data = _jikan_get(url)
+        data = self._get_with_retry(url)
         entry = data.get("data")
         if not entry:
             raise ProviderError(f"Jikan: no data for id={provider_id}", retryable=False)

@@ -11,6 +11,7 @@ from PySide6.QtGui import QAction, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -19,6 +20,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressDialog,
     QPushButton,
+    QScrollArea,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -68,6 +70,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("AnimeVault")
         self.resize(1600, 900)
+        self.setMinimumSize(900, 600)
 
         self._bulk_worker = None
         self._progress_dialog: Optional[QProgressDialog] = None
@@ -85,15 +88,9 @@ class MainWindow(QMainWindow):
 
         self._build_ui()
         self._build_shortcuts()
-        from animevault.ui.theme import ThemeManager
-        manager = ThemeManager.instance()
-        manager.theme_changed.connect(self._on_theme_changed)
-        manager.effects_changed.connect(self._on_effects_changed)
-        manager.liquid_glass_changed.connect(self._on_liquid_glass_changed)
-        manager.liquid_glass_changed.connect(self._on_liquid_glass_changed)
-        self._background.set_effects_reduced(
-            manager.reduce_effects or manager.theme_id == "minimal-simple"
-        )
+        from animevault.ui.theme import liquid_glass, reduce_effects
+        self._background.set_effects_reduced(reduce_effects())
+        self._set_liquid_glass(liquid_glass())
 
         self.library_changed.connect(self.refresh)
         self.refresh()
@@ -153,7 +150,15 @@ class MainWindow(QMainWindow):
         overview_layout.addWidget(self._overview_header)
 
         self._overview = OverviewPanel()
-        overview_layout.addWidget(self._overview, 1)
+        self._overview_scroll = QScrollArea()
+        self._overview_scroll.setObjectName("overviewScroll")
+        self._overview_scroll.setWidgetResizable(True)
+        self._overview_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._overview_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._overview_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._overview_scroll.setMinimumWidth(0)
+        self._overview_scroll.setWidget(self._overview)
+        overview_layout.addWidget(self._overview_scroll, 1)
         body.addWidget(self._overview_container)
 
         self._stack.addWidget(library_page)  # page 0
@@ -161,10 +166,19 @@ class MainWindow(QMainWindow):
         # Dashboard page
         from animevault.ui.dashboard_panel import DashboardPanel
 
-        self._dashboard = DashboardPanel()
-        self._dashboard.refresh_requested.connect(self._refresh_dashboard)
-        self._dashboard.back_requested.connect(self._show_library)
-        self._stack.addWidget(self._dashboard)  # page 1
+        try:
+            self._dashboard = DashboardPanel()
+            self._dashboard.refresh_requested.connect(self._refresh_dashboard)
+            self._dashboard.back_requested.connect(self._show_library)
+            self._stack.addWidget(self._dashboard)  # page 1
+        except Exception as e:
+            logger.exception("Failed to create dashboard panel: %s", e)
+            self._dashboard = None
+            # Add a placeholder widget so the stack still has 2 pages
+            placeholder = QWidget()
+            placeholder_layout = QVBoxLayout(placeholder)
+            placeholder_layout.addWidget(QLabel("Dashboard unavailable."))
+            self._stack.addWidget(placeholder)
 
         outer.addWidget(self._stack, 1)
 
@@ -181,8 +195,11 @@ class MainWindow(QMainWindow):
         header_layout.setContentsMargins(14, 8, 14, 0) if visible else header_layout.setContentsMargins(0, 8, 0, 0)
         header_layout.setSpacing(8 if visible else 0)
         if visible:
-            self._overview_container.setMinimumWidth(230)
-            self._overview_container.setMaximumWidth(16777215)
+            # The overview contains multi-column KPIs and charts; below this
+            # width their labels and chart legends are clipped rather than
+            # reflowing. Keep a usable sidebar width while letting it grow.
+            self._overview_container.setMinimumWidth(400)
+            self._overview_container.setMaximumWidth(520)
             self._overview_toggle.setText(">>")
             self._overview_toggle.setToolTip("Hide Overview")
             self._overview_toggle.setAccessibleName("Hide Overview")
@@ -942,34 +959,13 @@ class MainWindow(QMainWindow):
             "Built with PySide6 and SQLite.",
         )
 
-    def _on_theme_changed(self, theme_id: str) -> None:
-        """Refresh custom-painted cards while retaining the current selection."""
-        from animevault.ui.theme import ThemeManager
-
-        manager = ThemeManager.instance()
-        self._background.set_effects_reduced(
-            manager.reduce_effects or theme_id == "minimal-simple"
-        )
-        self._set_liquid_glass(manager.liquid_glass)
-        selected_ids = {
-            card.item.id for card in self._grid.cards if card.is_selected()
-        }
-        self._overview.apply_theme()
-        self.refresh()
-        for card in self._grid.cards:
-            if card.item.id in selected_ids:
-                card.set_selected(True)
-        self._delete_button.setEnabled(bool(selected_ids))
-        self._background.update()
+# (theme-change callbacks were retired with the 26-theme system)
 
     def _on_effects_changed(self, reduced: bool) -> None:
-        from animevault.ui.theme import ThemeManager
+        from animevault.ui.theme import liquid_glass, reduce_effects
 
-        manager = ThemeManager.instance()
-        self._background.set_effects_reduced(
-            reduced or manager.theme_id == "minimal-simple"
-        )
-        self._set_liquid_glass(manager.liquid_glass)
+        self._background.set_effects_reduced(reduced)
+        self._set_liquid_glass(liquid_glass())
 
     def _set_liquid_glass(self, enabled: bool) -> None:
         if enabled:
@@ -984,19 +980,33 @@ class MainWindow(QMainWindow):
 
     def _show_dashboard(self) -> None:
         """Show the Library Dashboard page (page 1)."""
-        self._stack.setCurrentIndex(1)
+        if self._dashboard is None:
+            QMessageBox.warning(self, "Dashboard", "Dashboard is not available.")
+            return
+        try:
+            self._stack.setCurrentIndex(1)
+            self._refresh_dashboard()
+        except Exception as e:
+            logger.exception("Failed to show dashboard: %s", e)
+            QMessageBox.critical(self, "Dashboard Error", f"Failed to show dashboard: {e}")
 
     def _show_library(self) -> None:
         """Return to the Library page (page 0) and refresh."""
-        self._stack.setCurrentIndex(0)
-        self.refresh()
+        try:
+            self._stack.setCurrentIndex(0)
+            self.refresh()
+        except Exception as e:
+            logger.exception("Failed to show library: %s", e)
 
     def _refresh_dashboard(self) -> None:
         """Refresh the dashboard with current library data."""
         if self._dashboard is not None:
-            from animevault.models.anime import Anime
-            from animevault.models.literature import Literature
-            self._dashboard.refresh(Anime.all(), Literature.all())
+            try:
+                from animevault.models.anime import Anime
+                from animevault.models.literature import Literature
+                self._dashboard.refresh(Anime.all(), Literature.all())
+            except Exception as e:
+                logger.exception("Failed to refresh dashboard: %s", e)
 
     def _show_settings(self) -> None:
         from animevault.ui.theme_dialog import ThemeSettingsDialog
@@ -1004,36 +1014,34 @@ class MainWindow(QMainWindow):
         ThemeSettingsDialog(self).exec()
 
     def _show_recommendations(self) -> None:
-        from animevault.ui.recommendation_panel import RecommendationPanel
+        """Show one reusable, independent recommendations window."""
+        from animevault.ui.recommendation_dialog import RecommendationDialog
 
-        # Remove the existing recommendations panel if present.
-        for i in range(self._body.count()):
-            widget = self._body.itemAt(i).widget()
-            if widget is not None and isinstance(widget, RecommendationPanel):
-                self._body.removeWidget(widget)
-                widget.deleteLater()
-                break
+        window = getattr(self, "_recommendation_window", None)
+        if window is not None:
+            try:
+                if window.isVisible():
+                    window.showNormal()
+                    window.raise_()
+                    window.activateWindow()
+                    return
+            except RuntimeError:
+                self._recommendation_window = None
 
-        panel = RecommendationPanel()
-        panel.refresh_requested.connect(self._refresh_recommendations)
-        panel.details_requested.connect(self._on_details)
-        # Note: to_plan_requested, to_library_requested, and
-        # not_interested_requested are handled internally by the
-        # RecommendationPanel (_on_to_plan, _on_to_library,
-        # _on_not_interested) and do not need MainWindow connections.
-        panel.category_changed.connect(self._on_category_changed)
+        try:
+            from animevault.models.anime import Anime
+            from animevault.models.literature import Literature
+            library_items = list(Anime.all()) + list(Literature.all())
+        except Exception:
+            library_items = []
 
-        # Insert the panel into the body layout after the overview container.
-        body = self._body
-        if body is not None:
-            # Find the position after the overview container
-            for j in range(body.count()):
-                w = body.itemAt(j).widget()
-                if w is self._overview_container:
-                    body.insertWidget(j + 1, panel)
-                    break
-            else:
-                body.addWidget(panel)
+        window = RecommendationDialog(self, library_items=library_items)
+        self._recommendation_window = window
+        window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        window.destroyed.connect(lambda *_: setattr(self, "_recommendation_window", None))
+        window.show()
+        window.raise_()
+        window.activateWindow()
 
     def _refresh_recommendations(self) -> None:
         # Re-run recommendation loading.  The panel refreshes itself via

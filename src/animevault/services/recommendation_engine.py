@@ -29,7 +29,7 @@ from typing import Iterable, Optional, Sequence
 from animevault.models.anime import Anime
 from animevault.database import get_connection
 
-from .user_preference_analyzer import UserProfile, analyze_preferences
+from .user_preference_analyzer import UserProfile, analyze_preferences, _activity_signal
 from .anime_similarity import anime_similarity, SimilarityScore
 from .recommendation_scorer import (
     Recommendation,
@@ -38,6 +38,8 @@ from .recommendation_scorer import (
 )
 from .recommendation_discovery import discover_candidates, search_by_title
 from .recommendation_cache import RecommendationCache
+from .recommendation_discovery import _candidate_key
+from .title_norm import normalize_title
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +76,11 @@ class RecommendationResult:
     is_new_discovery: bool = False
     is_similar: bool = False
     discovery_source: str = ""
+    title_ja: str = ""
+    episodes: int = 0
+    provider_key: str = ""
+    provider_id: str = ""
+    is_cached: bool = False
 
 
 @dataclass(frozen=True)
@@ -114,11 +121,16 @@ class RecommendationEngine:
         library_items: Optional[Sequence[Anime]] = None,
         user_hash: Optional[str] = None,
         online_discovery: bool = True,
+        jikan_service=None,
     ):
         self.library_items = list(library_items or [])
         self.user_hash = user_hash or self._default_user_hash()
         self.online_discovery = online_discovery
+        self.jikan_service = jikan_service
         self._category_profiles: dict[str, UserProfile] = {}
+        # Outcome of the most recent :meth:`get_recommendations` run.  Defaults
+        # to "none" so callers that ask before any run are not misleading.
+        self._last_outcome: str = "none"
 
     @staticmethod
     def _default_user_hash() -> str:
@@ -224,12 +236,31 @@ class RecommendationEngine:
         sort_by: str = "relevance",
         search_query: Optional[str] = None,
     ) -> list[RecommendationResult]:
-        """Return a ranked list of recommendations."""
+        """Return a ranked list of recommendations.
+
+        Owned items (anything already present in the user's library) are
+        excluded from the final list, preferring a reliable provider
+        identifier when one is available and falling back to a normalized
+        title.  The run outcome is stored on the engine and exposed by
+        :meth:`get_preference_summary` so the UI can distinguish:
+        insufficient preference data, no external candidates, provider /
+        network failure, all items owned, all items filtered out, or valid
+        recommendations.
+        """
         profile = self.category_profile(category)
+
+        # Owned-item exclusion prefers provider identifiers; titles are the
+        # fallback.  These sets are reused by candidate production and the
+        # final safety filter.
+        owned_ids = self._owned_provider_ids()
+        owned_titles = {normalize_title(a.title) for a in self.library_items}
+
         candidates = self._build_candidates(
-            profile, category, n, genre_filter, media_type_filter, search_query
+            profile, category, n, genre_filter, media_type_filter, search_query,
+            owned_ids=owned_ids, owned_titles=owned_titles,
         )
         results = self._score_and_rank(candidates, profile, category)
+
         # Apply filters.
         filtered = [
             r for r in results
@@ -237,11 +268,92 @@ class RecommendationEngine:
             and (media_type_filter == "all" or r.media_type == media_type_filter.upper())
             and (min_score == 0.0 or r.score >= min_score)
         ]
+        # Safety net: drop anything already owned (provider ids were already
+        # applied when the candidates were produced).
+        filtered = [r for r in filtered if not self._is_owned_result(r, owned_titles, owned_ids)]
+
         filtered.sort(key=lambda r: (
             r.is_plan_to_watch,
             -r.score,
         ))
-        return filtered[:n]
+        # Deduplicate.  A stable provider identifier (the result's item_id) is
+        # preferred; otherwise fall back to a normalized title + media type.
+        seen_keys: set = set()
+        deduped = []
+        for r in filtered:
+            key = self._dedup_key(r)
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            deduped.append(r)
+
+        self._determine_outcome(profile, deduped)
+        return deduped[:n]
+
+    def _owned_provider_ids(self) -> set:
+        """Stable provider identifiers present in the library.
+
+        Provider identifiers are the most reliable signal that two records
+        refer to the same work, so they are preferred for owned-item
+        exclusion.  Kitsu IDs are strings and are stored as-is.
+        """
+        ids: set = set()
+        for item in self.library_items:
+            for attr in ("anilist_id", "mal_id", "tmdb_id"):
+                value = getattr(item, attr, None)
+                if value:
+                    try:
+                        ids.add((attr, int(value)))
+                    except (TypeError, ValueError):
+                        pass
+            kitsu = getattr(item, "kitsu_id", None)
+            if kitsu:
+                ids.add(("kitsu_id", str(kitsu)))
+        return ids
+
+    def _is_owned_result(self, result: "RecommendationResult", owned_titles: set[str], owned_ids: set) -> bool:
+        """Return True when a scored result is already in the library.
+
+        Candidates that carried a provider identifier were checked against the
+        library at production time.  This title-only check is the defensive
+        fallback for results that do not carry an identifier.
+        """
+        if result.provider_key and result.provider_id:
+            try:
+                provider_id = int(result.provider_id) if result.provider_key != "kitsu_id" else result.provider_id
+            except ValueError:
+                return False
+            return (result.provider_key, provider_id) in owned_ids
+        return normalize_title(result.title) in owned_titles
+
+    def _dedup_key(self, result: "RecommendationResult") -> tuple:
+        """Deduplicate key for a recommendation result.
+
+        A stable provider identifier is preferred; otherwise a normalized
+        title + media type is used.  This keeps distinct works with identical
+        titles (different provider IDs) separate.
+        """
+        if result.provider_key and result.provider_id:
+            return ("provider", result.provider_key, result.provider_id, (result.media_type or "").strip().lower())
+        if result.item_id > 0:
+            return ("provider", result.item_id, (result.media_type or "").strip().lower())
+        return ("title", normalize_title(result.title), (result.media_type or "").strip().lower())
+
+    @staticmethod
+    def _candidate_provider_ids(candidate: "Candidate") -> set[tuple[str, object]]:
+        """Return all reliable provider IDs carried by a candidate."""
+        ids: set[tuple[str, object]] = set()
+        for attr in ("anilist_id", "mal_id", "tmdb_id"):
+            value = getattr(candidate, attr, None)
+            if value:
+                try:
+                    ids.add((attr, int(value)))
+                except (TypeError, ValueError):
+                    pass
+        kitsu = getattr(candidate, "kitsu_id", None)
+        if kitsu:
+            ids.add(("kitsu_id", str(kitsu)))
+        return ids
 
     def _build_candidates(
         self,
@@ -251,8 +363,14 @@ class RecommendationEngine:
         genre_filter: str,
         media_type_filter: str,
         search_query: Optional[str],
+        owned_ids: set,
+        owned_titles: set[str],
     ) -> list[RankingCandidate]:
         """Build candidate set from library + optional external discovery."""
+        # Outcome tracking for the empty-state messages.
+        self._external_candidates = []
+        self._external_candidates_after_owned = 0
+        self._discovery_failures = 0
         candidates: list[RankingCandidate] = []
         seen_ids: set[int] = set()
 
@@ -261,12 +379,8 @@ class RecommendationEngine:
         for item in self.library_items:
             if item.id in seen_ids:
                 continue
-            # Exclude already watched items. Plan-to-watch items are handled
-            # separately in block 3.
             status = getattr(item, "status", "plan_to_watch")
-            if status != "plan_to_watch":
-                continue
-            # Skip plan-to-watch items here too (handled in block 3).
+            # Block 1: process non-plan-to-watch items (completed, watching, etc.)
             if status == "plan_to_watch":
                 continue
             similarity = self._compute_similarity(item, profile)
@@ -279,34 +393,87 @@ class RecommendationEngine:
                 similarity=similarity,
                 category=category,
                 is_plan_to_watch=False,
-                is_new_discovery=True,
+                is_new_discovery=False,
                 is_similar=not (category == "all" and similarity.total < 0.15),
                 discovery_source="local",
             ))
             seen_ids.add(item.id)
 
-        # 2. External discovery (if enabled).
-        if self.online_discovery and search_query:
+        # Build search queries from user preferences for external discovery.
+        search_queries = []
+        if self.online_discovery:
+            profile = self.category_profile(category)
+            if profile and profile.has_preferences():
+                top_genres = [g for g, _ in profile.top_genres(3)]
+                # Search each top genre individually for better results.
+                for g in top_genres[:3]:
+                    search_queries.append(g)
+
+        # Seed Jikan's related-anime endpoint from a few strongly positive
+        # library titles with a stored MAL ID; the service caches these calls.
+        all_discovered = []
+        positive_seeds = sorted(
+            ((int(getattr(item, "mal_id", 0) or 0), str(getattr(item, "title", "")), _activity_signal(item))
+             for item in self.library_items if getattr(item, "mal_id", None)),
+            key=lambda seed: seed[2], reverse=True,
+        )
+        seed_ids = [(mal_id, title) for mal_id, title, strength in positive_seeds if strength > 0.15][:3]
+        if self.online_discovery and seed_ids:
             try:
-                discovered = discover_candidates(
-                    search_query, categories=[category] if category != "all" else None, limit=n
-                )
-                for c in discovered:
-                    if c.item_id in seen_ids:
-                        continue
-                    candidates.append(RankingCandidate(
-                        item=c,
-                        score=0.0,
-                        reasons=[],
-                        similarity=SimilarityScore(),
-                        is_plan_to_watch=False,
-                        is_new_discovery=True,
-                        is_similar=False,
-                        discovery_source="online",
-                    ))
-                    seen_ids.add(c.item_id)
+                from .jikan_recommendation_service import JikanRecommendationService
+                service = self.jikan_service or JikanRecommendationService()
+                all_discovered.extend(service.recommendations_for(seed_ids, per_seed=8, max_seeds=3))
+                if getattr(service, "last_error", None):
+                    self._discovery_failures += 1
             except Exception as exc:
-                logger.warning("Discovery failed: %s", exc)
+                self._discovery_failures += 1
+                logger.warning("Jikan related-anime discovery failed: %s", exc)
+
+        # Supplement with existing metadata-provider search for users whose
+        # library has no MAL IDs and for broader coverage of preferred genres.
+        if search_queries:
+            try:
+                all_discovered.extend(discover_candidates(search_queries[0], categories=None, limit=min(n, 20)))
+            except Exception as exc:
+                self._discovery_failures += 1
+                logger.warning("Supplementary anime discovery failed for %r: %s", search_queries[0], exc)
+
+        # Exclude items already in the library.  Provider identifiers are
+        # preferred (a stable id means two records are the same work even when
+        # titles differ); otherwise a normalized title + media type is used so
+        # that a TV and a Movie with the same title remain distinct works.
+        # Library entries are therefore excluded before scoring, and the final
+        # safety filter below is a redundant defensive check.
+        external_candidates = []
+        seen_ext: set = set()
+        for c in all_discovered:
+            provider_ids = self._candidate_provider_ids(c)
+            if provider_ids:
+                if provider_ids & owned_ids:
+                    continue
+            elif normalize_title(c.title) in owned_titles:
+                continue
+            key = _candidate_key(c)
+            if key in seen_ext:
+                continue
+            seen_ext.add(key)
+            external_candidates.append(c)
+
+        # Add external candidates to the candidate list.
+        for c in external_candidates:
+            candidates.append(RankingCandidate(
+                item=c,
+                score=0.0,
+                reasons=[],
+                similarity=self._compute_similarity(c, profile),
+                category=category,
+                is_plan_to_watch=False,
+                is_new_discovery=True,
+                is_similar=False,
+                discovery_source=c.discovery_source or "external",
+                recommendation_signal=float(getattr(c, "recommendation_signal", 0.0) or 0.0),
+                recommendation_reasons=list(getattr(c, "recommendation_reasons", []) or []),
+            ))
 
         # 3. Include plan-to-watch titles (planned anime).
         for item in self.library_items:
@@ -326,15 +493,22 @@ class RecommendationEngine:
                 ))
                 seen_ids.add(item.id)
 
+        # Record the external candidate counts for the empty-state outcome.
+        self._external_candidates = all_discovered
+        self._external_candidates_after_owned = len(external_candidates)
+
         return candidates
 
     def _compute_similarity(self, item, profile) -> SimilarityScore:
         """Compute similarity between a candidate and the user's profile."""
-        # Compare against a representative set of the user's preferences.
-        # In practice, compare against the top-N highly-rated items.
-        # For a placeholder, compare the candidate against itself using the
-        # same similarity function used by the engine.
-        return anime_similarity(item, item)  # placeholder; refined in scoring
+        positive_seeds = sorted(
+            (seed for seed in self.library_items if _activity_signal(seed) > 0.15),
+            key=_activity_signal,
+            reverse=True,
+        )[:10]
+        if not positive_seeds:
+            return SimilarityScore()
+        return max((anime_similarity(item, seed) for seed in positive_seeds), key=lambda value: value.total)
 
     def _score_and_rank(
         self,
@@ -346,14 +520,7 @@ class RecommendationEngine:
         if not candidates:
             return []
 
-        scorer = RecommendationScorer(profile, weights={
-            "genre_theme_similarity": 0.25,
-            "similarity_to_highly_rated": 0.25,
-            "tier_placement": 0.15,
-            "favorite_status": 0.15,
-            "watch_engagement": 0.10,
-            "metadata_similarity": 0.10,
-        })
+        scorer = RecommendationScorer(profile)
 
         profile_genre_weights = profile.genre_weights if profile else {}
         ranked = scorer.rank_candidates(candidates, profile_genre_weights)
@@ -377,17 +544,63 @@ class RecommendationEngine:
                 is_new_discovery=rec.is_new_discovery,
                 is_similar=rec.is_similar,
                 discovery_source=rec.discovery_source,
+                title_ja=rec.title_ja,
+                episodes=rec.episodes,
+                provider_key=rec.provider_key,
+                provider_id=rec.provider_id,
+                is_cached=rec.is_cached,
             ))
         return results
 
+    def _determine_outcome(
+        self,
+        profile: UserProfile,
+        results: list["RecommendationResult"],
+    ) -> None:
+        """Decide why the final list is empty (or not) and store it on the engine.
+
+        The outcome is exposed via :meth:`get_preference_summary` so the UI can
+        present a truthful empty state.  Provider/network failures are tracked
+        separately so they are never confused with an empty discovery response.
+        """
+        has_prefs = bool(profile and profile.has_preferences())
+        candidates_before_owned = len(self._external_candidates)
+        candidates_after_owned = self._external_candidates_after_owned
+        failures = self._discovery_failures
+
+        if not has_prefs:
+            self._last_outcome = "insufficient_preference_data"
+        elif failures > 0 and candidates_before_owned == 0 and not results:
+            self._last_outcome = "provider_failure"
+        elif candidates_before_owned == 0:
+            self._last_outcome = "no_external_candidates"
+        elif candidates_after_owned == 0:
+            self._last_outcome = "all_excluded_owned"
+        elif not results:
+            self._last_outcome = "all_excluded_filter"
+        else:
+            self._last_outcome = "valid_recommendations"
+
     def get_preference_summary(self) -> dict:
-        """Return a summary of the user's preferences."""
+        """Return a summary of the user's preferences.
+
+        Also reports the outcome of the most recent :meth:`get_recommendations`
+        run via ``recommendation_status`` so the UI can present truthful empty
+        states (insufficient data, no candidates, provider/network failure,
+        all owned, all filtered, valid).
+        """
         profile = self.profile
-        if not profile or not profile.signal_values:
-            return {"status": "insufficient_data"}
+        if not profile or not getattr(profile, "signal_values", None):
+            return {
+                "status": "insufficient_data",
+                "recommendation_status": "insufficient_preference_data",
+            }
         sv = profile.signal_values
         return {
             "has_preferences": profile.has_preferences(),
+            "recommendation_status": self._last_outcome
+            if self._last_outcome
+            else "none",
             "score_avg": round(sv.score_avg, 2) if sv.score_avg else 0.0,
             "rating_count": len(sv.ratings),
             "top_genres": [(g, round(w, 3)) for g, w in profile.top_genres(5)],

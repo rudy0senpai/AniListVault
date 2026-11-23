@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from pathlib import Path
 
@@ -40,49 +41,6 @@ def isolated_database(tmp_path: Path, monkeypatch):
     db_mod._disconnect_cached()
 
 
-@pytest.fixture(autouse=True)
-def reset_theme_manager():
-    """Reset ThemeManager singleton to default state for each test."""
-    from animevault.ui.theme import ThemeManager, _activate_tokens, THEMES, DEFAULT_THEME_ID
-    from animevault.ui import theme as theme_tokens
-
-    # Reset QSettings for liquid_glass so tests start from a known state
-    settings = QSettings("AnimeVault", "AnimeVault")
-    settings.remove("appearance/liquid_glass")
-
-    # Reset singleton
-    ThemeManager._instance = None
-
-    # Reset global theme tokens to default
-    default_theme = THEMES[DEFAULT_THEME_ID]
-    _activate_tokens(default_theme)
-    theme_tokens._REDUCE_EFFECTS = False
-
-    # Re-export the updated tokens to the module
-    import animevault.ui.theme as theme_module
-    theme_module.BG_DEEP = default_theme.background
-    theme_module.BG_PANEL = default_theme.panel
-    theme_module.BG_PANEL_HI = default_theme.panel_hover
-    theme_module.BG_INPUT = default_theme.input
-    theme_module.BORDER = default_theme.border
-    theme_module.BORDER_HI = default_theme.border_hover
-    theme_module.ACCENT = default_theme.accent
-    theme_module.ACCENT_DIM = default_theme.accent_dim
-    theme_module.ACCENT_DEEP = default_theme.accent_deep
-    theme_module.TEXT_PRIMARY = default_theme.text
-    theme_module.TEXT_SECONDARY = default_theme.text_secondary
-    theme_module.TEXT_MUTED = default_theme.text_muted
-    theme_module.TEXT_ON_ACCENT = default_theme.text_on_accent
-    theme_module.DANGER = default_theme.danger
-    theme_module.SUCCESS = default_theme.success
-    theme_module.WARNING = default_theme.warning
-
-    yield
-
-    # Clean up singleton after test
-    ThemeManager._instance = None
-
-
 @pytest.fixture
 def db_conn(isolated_database: Path) -> sqlite3.Connection:
     """Direct connection to the test database for assertions."""
@@ -100,3 +58,86 @@ def migrated_database(isolated_database: Path):
     for tests that want to state that dependency.
     """
     return isolated_database
+
+# ── Backend (FastAPI) fixtures ──────────────────────────────────────────
+import os
+from pathlib import Path
+
+from fastapi.testclient import TestClient
+
+from backend.main import create_app
+
+#: The REAL user database that the PySide6 app opens.
+def _resolve_real_db() -> Path:
+    appdir = os.environ.get("APPDATA")
+    if appdir:
+        return Path(appdir) / "AnimeVault" / "animevault.db"
+    return Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local"))) / "AnimeVault" / "animevault.db"
+
+
+REAL_DB = _resolve_real_db()
+
+
+def _snapshot(path: Path) -> dict:
+    import sqlite3
+    conn = sqlite3.connect(str(path), detect_types=sqlite3.PARSE_DECLTYPES)
+    conn.row_factory = sqlite3.Row
+    try:
+        tables = [
+            r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name"
+            ).fetchall()
+        ]
+        schema = {}
+        for t in tables:
+            schema[t] = conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", (t,)
+            ).fetchone()[0]
+        meta = {
+            r["key"]: r["value"] for r in conn.execute("SELECT key, value FROM meta")
+        }
+        counts = {
+            "anime": conn.execute("SELECT COUNT(*) FROM anime").fetchone()[0],
+            "literature": conn.execute("SELECT COUNT(*) FROM literature").fetchone()[0],
+            "anime_metadata": conn.execute(
+                "SELECT COUNT(*) FROM anime_metadata"
+            ).fetchone()[0],
+        }
+        poster_rows = conn.execute(
+            "SELECT poster_path FROM anime_metadata WHERE poster_path != '' ORDER BY poster_path LIMIT 200"
+        ).fetchall()
+        return {
+            "schema": schema,
+            "meta": meta,
+            "counts": counts,
+            "poster_sample": [r["poster_path"] for r in poster_rows],
+        }
+    finally:
+        conn.close()
+
+
+@pytest.fixture()
+def db_snapshot():
+    """Snapshot the REAL user database; restore afterwards."""
+    old = database_path()
+    set_database_path(REAL_DB)
+    try:
+        snap = _snapshot(REAL_DB)
+    finally:
+        set_database_path(old)
+    return snap
+
+
+@pytest.fixture()
+def client(db_snapshot):
+    """TestClient pointing at the real user database."""
+    old = database_path()
+    set_database_path(REAL_DB)
+    app = create_app()
+    with TestClient(app) as c:
+        yield c
+    set_database_path(old)
+
+
+Path = Path  # no-op tidy-up
+DB_PATH = REAL_DB

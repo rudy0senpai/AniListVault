@@ -44,6 +44,49 @@ class TestUIFlow:
         restored.close()
         settings.clear()
 
+    def test_overview_uses_scroll_viewport_and_has_no_rec_panel(self, migrated_database, tmp_path):
+        from PySide6.QtCore import QSettings, Qt
+        from PySide6.QtWidgets import QScrollArea
+        from animevault.ui.main_window import MainWindow
+
+        QSettings.setDefaultFormat(QSettings.Format.IniFormat)
+        QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, str(tmp_path))
+        window = MainWindow()
+        assert window._overview_scroll.widget() is window._overview
+        assert window._overview_scroll.verticalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        assert not any(type(window._body.itemAt(i).widget()).__name__ == "RecommendationPanel" for i in range(window._body.count()) if window._body.itemAt(i).widget())
+        window.close()
+
+    def test_recommendations_open_in_one_independent_reusable_window(self, migrated_database, tmp_path, monkeypatch):
+        from PySide6.QtCore import QSettings, Qt
+        from PySide6.QtWidgets import QDialog
+        from animevault.ui.main_window import MainWindow
+        import animevault.ui.recommendation_dialog as rec_module
+
+        class StubWindow(QDialog):
+            def __init__(self, parent=None, library_items=None):
+                super().__init__(parent, Qt.WindowType.Window)
+                self.items = library_items
+                self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+
+        monkeypatch.setattr(rec_module, "RecommendationDialog", StubWindow, raising=False)
+        QSettings.setDefaultFormat(QSettings.Format.IniFormat)
+        QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, str(tmp_path))
+        window = MainWindow()
+        window.show()
+        window._show_recommendations()
+        first = window._recommendation_window
+        assert first is not None and first.isVisible() and first.isWindow()
+        window._show_recommendations()
+        assert window._recommendation_window is first
+        first.close()
+        self.app.processEvents()
+        assert not window.isHidden()
+        window._show_recommendations()
+        assert window._recommendation_window is not first
+        window._recommendation_window.close()
+        window.close()
+
     def test_add_anime_dialog_manual_entry(self, isolated_database):
         dlg = AddAnimeDialog()
         dlg._title_edit.setText("Cowboy Bebop")

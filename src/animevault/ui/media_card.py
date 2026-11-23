@@ -34,6 +34,10 @@ from PySide6.QtWidgets import (
 
 from animevault.ui import theme as theme_tokens
 from animevault.ui.theme import (
+    BG_SURFACE,
+    BORDER,
+    BORDER_GLASS,
+    STATUS_COLORS,
     tier_badge_style,
     tier_color,
     status_badge_style,
@@ -238,13 +242,25 @@ class MediaCard(QFrame):
             tier_badge.setToolTip("No tier assigned")
         badge_row.addWidget(tier_badge)
         badge_row.addStretch()
-
         right.addLayout(badge_row)
         right.addStretch()
         outer.addLayout(right, 1)
 
+        # Selection check indicator (glass accent, top-right of the card).
+        self._check = QLabel("✓")
+        self._check.setObjectName("cardCheck")
+        self._check.setVisible(False)
+        self._check.setStyleSheet(
+            f"color:{theme_tokens.ACCENT}; font-size:15px; "
+            f"font-weight:700; letter-spacing:1px;"
+        )
+        self._check.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._check.setFixedSize(22, 22)
+        outer.addWidget(self._check, 0, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight)
+
         self.setMinimumWidth(_ART_W + 150)
         self.setMaximumHeight(_ART_H + 20)
+        self._update_surface()
 
     # ── Public API ─────────────────────────────────────────────────
 
@@ -262,12 +278,32 @@ class MediaCard(QFrame):
     def set_selected(self, selected: bool) -> None:
         self._selected = selected
         self.setProperty("selected", selected)
-        # Re-polish so the stylesheet's [selected="true"] rule applies.
+        self._update_surface()
+        self._check.setVisible(selected)
+        # Re-polish so the stylesheet's [selected] rule applies.
         self.style().unpolish(self)
         self.style().polish(self)
 
     def refresh_art(self, poster_path: str) -> None:
         self._poster.set_art(poster_path)
+
+    def _update_surface(self) -> None:
+        """Apply translucent glass surface + selection state styling."""
+        if self._selected:
+            style = (
+                f"background:{BG_SURFACE}; border:2px solid {theme_tokens.ACCENT}; "
+                f"border-radius:14px; box-shadow:"
+                f"0 4px 14px rgba(45,212,191,0.18), "
+                f"inset 0 1px 0 rgba(255,255,255,0.08);"
+            )
+        else:
+            style = (
+                f"background:{BG_SURFACE}; border:1px solid {BORDER_GLASS}; "
+                f"border-radius:14px; box-shadow:"
+                f"0 2px 8px rgba(10,12,16,0.30), "
+                f"inset 0 1px 0 rgba(255,255,255,0.06);"
+            )
+        self.setStyleSheet(style)
 
     # ── Interaction ────────────────────────────────────────────────
 
