@@ -123,11 +123,13 @@ class RecommendationEngine:
         user_hash: Optional[str] = None,
         online_discovery: bool = True,
         jikan_service=None,
+        anilist_service=None,
     ):
         self.library_items = list(library_items or [])
         self.user_hash = user_hash or self._default_user_hash()
         self.online_discovery = online_discovery
         self.jikan_service = jikan_service
+        self.anilist_service = anilist_service
         self._category_profiles: dict[str, UserProfile] = {}
         self._external_candidates = []
         self._external_candidates_after_owned = 0
@@ -476,11 +478,11 @@ class RecommendationEngine:
         service = None
         if self.online_discovery and profile and profile.has_preferences():
             try:
-                from .jikan_recommendation_service import JikanRecommendationService
-                service = self.jikan_service or JikanRecommendationService()
+                from .anilist_recommendation_service import AniListRecommendationService
+                service = self.anilist_service or AniListRecommendationService(online_discovery=self.online_discovery)
             except Exception as exc:
                 self._discovery_failures += 1
-                logger.exception("Could not initialize Jikan discovery service")
+                logger.exception("Could not initialize AniList discovery service")
                 self._discovery_errors.append({"source": "service_initialization", "category": "provider_error", "message": str(exc)})
         if service is not None:
             reset = getattr(service, "reset_diagnostics", None)
@@ -490,13 +492,13 @@ class RecommendationEngine:
                 try:
                     all_discovered.extend(service.recommendations_for(seed_ids, per_seed=8, max_seeds=3))
                 except Exception as exc:
-                    logger.warning("Related-anime discovery failed: %s", exc)
+                    logger.warning("AniList related-anime discovery failed: %s", exc)
                     self._discovery_errors.append({"source": "related_recommendations", "category": self._error_category(exc), "message": str(exc)})
             if genre_names:
                 try:
                     all_discovered.extend(service.genre_candidates(genre_names, max_genres=3, pages_per_genre=2, limit=15))
                 except Exception as exc:
-                    logger.warning("Jikan genre discovery failed: %s", exc)
+                    logger.warning("AniList genre discovery failed: %s", exc)
                     self._discovery_errors.append({"source": "genre_discovery", "category": self._error_category(exc), "message": str(exc)})
             self._discovery_errors.extend(list(getattr(service, "errors", []) or []))
             self._discovery_stats = dict(getattr(service, "stats", {}) or {})

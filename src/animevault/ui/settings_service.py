@@ -16,6 +16,7 @@ import logging
 import os
 import subprocess
 import sys
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -228,7 +229,7 @@ class SettingsService:
             except (json.JSONDecodeError, OSError) as exc:
                 logger.warning("Failed to read settings JSON: %s", exc)
         # 2. Migrate legacy QSettings keys
-        for key, value in self._settings.allKeys():
+        for key in self._settings.allKeys():
             if key.startswith("ui/"):
                 # e.g. ui/glass_cards — map to appearance
                 pass
@@ -265,7 +266,8 @@ class SettingsService:
     def get(self, key: str, default: Any = None) -> Any:
         """Get a setting value by dot-notation key (e.g. "library.view")."""
         path = key.split(".")
-        value: Any = self.data
+        data = self.data.to_dict()
+        value: Any = data
         for part in path:
             if isinstance(value, dict):
                 value = value.get(part, default)

@@ -51,11 +51,13 @@ html.av-topbar-document body { overflow: visible; }
 .av-liquid-topbar .lg-btn { padding: 8px 13px; white-space: nowrap; }
 .av-liquid-topbar .lg-menuwrap { flex: none; }
 .av-liquid-topbar .lg-menu {
-  position: fixed;
-  top: 60px;
+  position: absolute;
+  top: calc(100% + 12px);
   left: 0;
+  min-width: 248px;
   max-height: calc(100vh - 96px);
   overflow-y: auto;
+  z-index: 50;
 .av-liquid-topbar .lg-btn:disabled { opacity: .44; cursor: not-allowed; filter: saturate(.5); }
 @media (max-width: 950px) {
   .av-liquid-topbar { padding-inline: 12px; }
@@ -63,4 +65,6 @@ html.av-topbar-document body { overflow: visible; }
   .av-liquid-brand { font-size: 20px; }
   .av-liquid-topbar .lg-tab { padding-inline: 12px; }
   .av-liquid-actions { gap: 4px; }
+}
+
 }

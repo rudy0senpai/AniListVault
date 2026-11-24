@@ -958,10 +958,16 @@ class DashboardPanel(QFrame):
         layout.addWidget(label)
 
     def _open_recommendation_dialog(self) -> None:
-        from animevault.ui.recommendation_dialog import RecommendationDialog
+        from animevault.ui.recommendations_window import open_recommendations
+        from animevault.app import get_app
 
-        dialog = RecommendationDialog(self, library_items=self._animes)
-        dialog.exec()
+        state_dir = getattr(get_app(), "state_dir", None) or Path.home() / ".animevault" / "recommendation_state"
+        # Build a library provider from the dashboard's anime list
+        def library_provider():
+            return list(self._animes)
+
+        # Use the existing window if open, otherwise open a new one
+        open_recommendations(self, library_provider, state_dir)
 
     def _refresh_styles(self) -> None:
         """Refresh chart/panel painting after application theme changes."""

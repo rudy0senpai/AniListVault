@@ -13,6 +13,10 @@ from animevault.migration import run_migrations
 ICON_PATH = Path(__file__).resolve().parent / "resources" / "media" / "app.ico"
 
 
+# Module-level singleton (thread-safe).
+_app = None
+
+
 def create_app() -> QApplication:
     """Create (or retrieve) the QApplication and ensure the DB is ready.
 
@@ -21,6 +25,9 @@ def create_app() -> QApplication:
     QApplication
         The singleton QApplication instance.
     """
+    global _app
+    if _app is not None:
+        return _app
     app = QApplication.instance()
     if app is None:
         app = QApplication([])
@@ -47,9 +54,14 @@ def create_app() -> QApplication:
     set_reduce_effects(reduce_effects(app))
     set_liquid_glass(liquid_glass(app))
 
-    # Make sure the database and schema exist before the first window
-    # is shown, then bring the schema up to the current version.
+    # Make sure the database and schema exist before the first window is shown.
     initialize_database()
     run_migrations()
 
-    return app
+    _app = app
+    return _app
+
+
+def get_app() -> QApplication:
+    """Return the current QApplication singleton (creates one if needed)."""
+    return create_app()

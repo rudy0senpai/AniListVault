@@ -125,6 +125,74 @@ class SettingsBridge(QObject):
         """Display open-source licenses."""
         self.actionTriggered.emit("licenses_opened")
 
+    @Slot(str, result=str)
+    def apply_settings(self, settings_json: str) -> str:
+        """Validate, save, and apply settings.
+
+        Returns a JSON string with the result: {"status": "success", ...} or
+        {"status": "error", "message": "..."}.
+        """
+        try:
+            data = json.loads(settings_json)
+            settings = Settings.from_dict(data)
+            settings.validate()
+
+            # Save atomically to the authoritative JSON persistence layer.
+            self._settings_service.save(settings)
+
+            # Apply supported changes to the running application.
+            self._apply_settings(settings)
+
+            logger.info("Settings applied: %s", settings.to_dict())
+            return json.dumps({"status": "success"})
+        except ValueError as exc:
+            logger.exception("Settings validation failed: %s", exc)
+            return json.dumps({"status": "error", "message": str(exc)})
+        except Exception as exc:
+            logger.exception("Failed to apply settings: %s", exc)
+            return json.dumps({"status": "error", "message": str(exc)})
+
+    def _apply_settings(self, settings: Settings) -> None:
+        """Apply supported settings to the running application."""
+        # Appearance & theme
+        colors = settings.colors
+        self._owner.set_appearance(
+            theme_id=settings.themeId,
+            accent=colors.get("accent", "#7ee8d0"),
+            secondary=colors.get("secondary", "#b79cf5"),
+            bg=colors.get("bg", "#0b1020"),
+            surface=colors.get("surface", "#131a2e"),
+            text=colors.get("text", "#e6ecfa"),
+            glass=settings.glass,
+            animations=settings.animations,
+            reduce=settings.reduce,
+        )
+
+        # Library
+        lib = settings.library
+        self._owner.set_library_defaults(
+            view=lib.get("view", "Grid"),
+            show_progress=lib.get("progress", True),
+            confirm_delete=lib.get("confirmDelete", True),
+            auto_complete=lib.get("autoComplete", False),
+        )
+
+        # Notifications
+        notif = settings.notifications
+        self._notification_service.set_enabled(notif.get("episodes", True))
+        self._notification_service.set_episodes(notif.get("reminders", False))
+        self._notification_service.set_badge_count(notif.get("badge", True))
+
+        # Performance
+        perf = settings.performance
+        if hasattr(self._cache_service, "set_max_size"):
+            self._cache_service.set_max_size(perf.get("cache", 500))
+
+    def _apply_visibility(self, visible: bool) -> None:
+        """Apply the visibility state of the settings panel."""
+        if self._owner is not None:
+            self._owner._settings_view.setVisible(visible)
+
 
 class SettingsPanel:
     """Manager for the settings panel UI.

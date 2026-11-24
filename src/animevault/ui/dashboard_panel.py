@@ -938,7 +938,8 @@ class DashboardPanel(QFrame):
         root.addWidget(frame, 0)
 
     def _open_recommendation_dialog(self) -> None:
-        from animevault.ui.recommendation_dialog import RecommendationDialog
+        from animevault.ui.recommendations_window import open_recommendations
+        from animevault.app import get_app
 
         animes = getattr(self, "_animes", None)
         if animes is None:
@@ -947,8 +948,12 @@ class DashboardPanel(QFrame):
                 animes = Anime.all()
             except Exception:
                 animes = []
-        dlg = RecommendationDialog(self, library_items=animes)
-        dlg.exec()
+
+        state_dir = getattr(get_app(), "state_dir", None) or Path.home() / ".animevault" / "recommendation_state"
+        def library_provider():
+            return list(animes)
+
+        open_recommendations(self, library_provider, state_dir)
 
 
     def _on_effects_changed(self, enabled: bool) -> None:

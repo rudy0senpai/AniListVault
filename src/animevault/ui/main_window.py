@@ -1303,10 +1303,39 @@ class MainWindow(QMainWindow):
         # Bottom action bar
         action_bar = QHBoxLayout()
         action_bar.setContentsMargins(8, 8, 8, 8)
-        apply_btn = BubbleButton("Apply", variant="accent", style_sheet="min-width:100px;")
+        # Apply and Close buttons use native QPushButton with Liquid Glass styling
+        apply_btn = QPushButton("Apply")
+        apply_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        apply_btn.setMinimumWidth(100)
+        apply_btn.setStyleSheet(
+            "QPushButton { color: rgba(232, 238, 250, 0.92); background: transparent; "
+            "border: 1px solid rgba(255,255,255,0.14); border-radius: 30px; "
+            "padding: 8px 24px; font: 500 13px 'Segoe UI', system-ui, sans-serif; "
+            "backdrop-filter: blur(24px) saturate(1.8); "
+            "box-shadow: inset 0 1px 1px rgba(255,255,255,0.45), "
+            "0 20px 40px -22px rgba(126,232,208,0.6); "
+            "transition: all 0.3s; }"
+            "QPushButton:hover { background: rgba(126,232,208,0.15); }"
+            "QPushButton:pressed { background: rgba(126,232,208,0.25); }"
+            "QPushButton:focus-visible { outline: 2px solid rgba(126,232,208,0.9); outline-offset: 3px; }"
+        )
         apply_btn.clicked.connect(self._on_apply_settings)
         action_bar.addWidget(apply_btn)
-        close_btn = BubbleButton("Close", style_sheet="min-width:100px;")
+        close_btn = QPushButton("Close")
+        close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        close_btn.setMinimumWidth(100)
+        close_btn.setStyleSheet(
+            "QPushButton { color: rgba(232, 238, 250, 0.92); background: transparent; "
+            "border: 1px solid rgba(255,255,255,0.14); border-radius: 30px; "
+            "padding: 8px 24px; font: 500 13px 'Segoe UI', system-ui, sans-serif; "
+            "backdrop-filter: blur(24px) saturate(1.8); "
+            "box-shadow: inset 0 1px 1px rgba(255,255,255,0.45), "
+            "0 20px 40px -22px rgba(126,232,208,0.6); "
+            "transition: all 0.3s; }"
+            "QPushButton:hover { background: rgba(126,232,208,0.15); }"
+            "QPushButton:pressed { background: rgba(126,232,208,0.25); }"
+            "QPushButton:focus-visible { outline: 2px solid rgba(126,232,208,0.9); outline-offset: 3px; }"
+        )
         close_btn.clicked.connect(dialog.reject)
         action_bar.addWidget(close_btn)
         layout.addLayout(action_bar)
@@ -1350,34 +1379,99 @@ class MainWindow(QMainWindow):
         logger.info("[%s] %s", level.upper(), message)
 
     def _show_recommendations(self) -> None:
-        """Show one reusable, independent recommendations window."""
-        from animevault.ui.recommendation_dialog import RecommendationDialog
+        """Show one reusable, independent Recommendations window."""
+        from animevault.ui.recommendations_window import open_recommendations
 
         window = getattr(self, "_recommendation_window", None)
         if window is not None:
             try:
                 if window.isVisible():
-                    window.showNormal()
+                    window.show()
                     window.raise_()
                     window.activateWindow()
                     return
             except RuntimeError:
                 self._recommendation_window = None
 
+        # Build a library provider (a zero-argument callable returning the items).
         try:
             from animevault.models.anime import Anime
             from animevault.models.literature import Literature
-            library_items = list(Anime.all()) + list(Literature.all())
+            def library_provider():
+                return list(Anime.all()) + list(Literature.all())
         except Exception:
-            library_items = []
+            library_provider = lambda: []
 
-        window = RecommendationDialog(self, library_items=library_items)
-        self._recommendation_window = window
-        window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
-        window.destroyed.connect(lambda *_: setattr(self, "_recommendation_window", None))
-        window.show()
-        window.raise_()
-        window.activateWindow()
+        # Use the app's state directory for persisted pool/feedback.
+        from animevault.app import get_app
+        state_dir = getattr(get_app(), "state_dir", None) or Path.home() / ".animevault" / "recommendation_state"
+        open_recommendations(self, library_provider, state_dir)
+
+    # ── Settings application (Liquid Glass) ───────────────────────────────
+
+    def set_appearance(
+        self,
+        *,
+        theme_id: str,
+        accent: str,
+        secondary: str,
+        bg: str,
+        surface: str,
+        text: str,
+        glass: int,
+        animations: bool,
+        reduce: bool,
+    ) -> None:
+        """Apply appearance settings to the running application."""
+        from animevault.ui.theme import (
+            BG_DEEP,
+            BG_SURFACE,
+            GLASS_SURFACE,
+            TEXT_PRIMARY,
+            TEXT_SECONDARY,
+            DANGER,
+        )
+
+        # Persist appearance preferences to QSettings.
+        self._settings.setValue("appearance/reduce_effects", reduce)
+        self._settings.setValue("appearance/liquid_glass", True)
+        self._settings.setValue("appearance/theme_id", theme_id)
+        self._settings.setValue("appearance/glass", glass)
+        self._settings.sync()
+
+        # Update native widgets (background, scroll areas, cards) so the
+        # reduced-effects preference is honoured across the desktop UI.
+        self._background.set_effects_reduced(reduce)
+        for scroll in self.findChildren(QScrollArea):
+            from animevault.ui.scroll_animation import ScrollRevealArea
+            if isinstance(scroll, ScrollRevealArea):
+                scroll.set_effects_reduced(reduce)
+        for card in self.findChildren(MediaCard):
+            card.set_effects_reduced(reduce)
+
+        # Tell the Qt stylesheet which liquid-glass mode is active so the
+        # desktop chrome (header, toolbar) matches the web surface.
+        self._set_liquid_glass(liquid_glass())
+
+    def set_library_defaults(
+        self,
+        *,
+        view: str,
+        show_progress: bool,
+        confirm_delete: bool,
+        auto_complete: bool,
+    ) -> None:
+        """Apply library display preferences."""
+        self._settings.setValue("library/view", view)
+        self._settings.setValue("library/progress", show_progress)
+        self._settings.setValue("library/confirm_delete", confirm_delete)
+        self._settings.setValue("library/auto_complete", auto_complete)
+        self._settings.sync()
+
+    def set_settings_view_visible(self, visible: bool) -> None:
+        """Show or hide the settings web view."""
+        if self._settings_view is not None:
+            self._settings_view.setVisible(visible)
 
     def _refresh_recommendations(self) -> None:
         # Re-run recommendation loading.  The panel refreshes itself via

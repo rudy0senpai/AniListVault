@@ -363,15 +363,47 @@ class LibraryBridge(QObject):
     def selected_records(self) -> list[Any]:
         return [self._records[key] for key in self._selected if key in self._records]
 
+    # ── Bridge contract validation ───────────────────────────────
+    def validate_contract(self, required_slots: list[str], required_signals: list[str]) -> list[str]:
+        """Validate that the bridge exposes all required slots and signals.
+
+        Returns a list of missing names (empty list means contract is satisfied).
+        """
+        missing = []
+        for name in required_slots:
+            if not hasattr(self, name) or not callable(getattr(self, name)):
+                missing.append(name)
+        for name in required_signals:
+            if not hasattr(self, name):
+                missing.append(name)
+        return missing
+
+
 
 Bridge = LibraryBridge
 
 
 class AnimeWebView(QWebEngineView):
     """Embedded React surface, with a Vite URL override for development."""
+
+    # Required slots/signals for the library bridge contract
+    _LIBRARY_BRIDGE_SLOTS = [
+        "getLibrary", "getDashboard", "refreshDashboard", "getCategory",
+        "getSelectedCount", "getRetryAvailable", "setMenuOpen", "menuAction",
+        "openRecord", "openRecommendations", "showMenu", "setSelected",
+        "setSelectionMode", "update_poster", "replace_library", "libraryChanged",
+        "dashboardChanged", "selectionChanged", "selectionModeChanged",
+        "categoryChanged", "retryAvailableChanged",
+    ]
+    _LIBRARY_BRIDGE_SIGNALS = [
+        "libraryChanged", "dashboardChanged", "selectionChanged",
+        "selectionModeChanged", "categoryChanged", "retryAvailableChanged",
+    ]
+
     def __init__(self, owner: Any, bridge: LibraryBridge | None = None, surface: str = "library") -> None:
         super().__init__(owner)
         self.bridge = bridge or LibraryBridge(owner)
+        self._validate_bridge_contract(self.bridge, self._LIBRARY_BRIDGE_SLOTS, self._LIBRARY_BRIDGE_SIGNALS)
         self.channel = QWebChannel(self.page())
         self.channel.registerObject("bridge", self.bridge)
         self.page().setWebChannel(self.channel)
@@ -388,3 +420,10 @@ class AnimeWebView(QWebEngineView):
             self.page().setBackgroundColor(QColor(0, 0, 0, 0))
             self.setStyleSheet("background: transparent;")
         self.setUrl(url)
+
+    @classmethod
+    def _validate_bridge_contract(cls, bridge: QObject, required_slots: list[str], required_signals: list[str]) -> None:
+        """Validate the bridge contract; raise on missing methods/signals."""
+        missing = bridge.validate_contract(required_slots, required_signals)
+        if missing:
+            raise RuntimeError(f"Bridge contract validation failed: missing {missing}")

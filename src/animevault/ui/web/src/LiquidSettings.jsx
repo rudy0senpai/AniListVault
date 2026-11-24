@@ -147,26 +147,60 @@ const DEFAULTS = {
   themeId: "midnight", colors: themeColors(THEMES[0]), customThemes: [],
   glass: 70, animations: true, reduce: false, values: defaultValues,
 };
-function load(bridge) {
-  try {
-    if (bridge && typeof bridge.getSettings === "function") {
-      const raw = bridge.getSettings();
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (parsed) return { ...DEFAULTS, ...parsed, colors: { ...DEFAULTS.colors, ...parsed.colors }, values: { ...defaultValues, ...parsed.values } };
+
+// Async settings loading with proper loading state and error handling.
+// Qt WebChannel getSettings is a @Slot(result=str) that returns a JSON string
+// synchronously across the web channel, so we wrap it in a Promise.
+async function loadAsync(bridge) {
+  const loading = { loaded: false, error: null, settings: null };
+
+  if (!bridge || typeof bridge.getSettings !== "function") {
+    loading.settings = DEFAULTS;
+    loading.loaded = true;
+    return loading;
+  }
+
+  // Bridge.getSettings returns a JSON string synchronously via the WebChannel.
+  return new Promise((resolve) => {
+    try {
+      if (typeof bridge.getSettings === "function") {
+        const raw = bridge.getSettings();
+        if (raw) {
+          try {
+            const parsed = JSON.parse(raw);
+            if (parsed) {
+              loading.settings = {
+                ...DEFAULTS,
+                ...parsed,
+                colors: { ...DEFAULTS.colors, ...parsed.colors },
+                values: { ...defaultValues, ...parsed.values },
+              };
+              loading.loaded = true;
+            } else {
+              loading.error = "Parsed settings were empty";
+              loading.settings = DEFAULTS;
+            }
+          } catch (parseError) {
+            loading.error = `Failed to parse settings JSON: ${parseError.message}`;
+            loading.settings = DEFAULTS;
+          }
+        } else {
+          loading.error = "Bridge returned no data";
+          loading.settings = DEFAULTS;
+        }
       }
+    } catch (e) {
+      loading.error = `Bridge.getSettings threw: ${e.message}`;
+      loading.settings = DEFAULTS;
     }
-  } catch (e) { /* bridge unavailable, fall through to default */ }
-  return DEFAULTS;
+    loading.loaded = true;
+    resolve(loading);
+  });
 }
 
-/** CSS variables to theme the rest of the app from applied settings. */
-export function themeToCssVars(s) {
-  const c = s.colors;
-  return {
-    "--av-accent": c.accent, "--av-secondary": c.secondary, "--av-bg": c.bg, "--av-surface": c.surface, "--av-text": c.text,
-    "--lg-accent": rgbStr(c.accent), "--lg-violet": rgbStr(c.secondary),
-  };
+// Wrapper that returns the loading state
+function load(bridge) {
+  return loadAsync(bridge);
 }
 
 /* ================================== CSS ================================== */
@@ -650,6 +684,9 @@ export function themeToCssVars(s) {
 
 /* ================================== main ================================== */
 export default function Settings({ bridge, onApply, onClose, onAction, version = "1.0.0" }) {
+  // Async load: settings may come from the bridge (QWebChannel),
+  // which is asynchronous. Use a promise to await the result.
+  const [loading, setLoading] = useState(true);
   const [applied, setApplied] = useState(() => load(bridge));
   const [d, setD] = useState(applied);
   const [section, setSection] = useState("appearance");
@@ -657,6 +694,24 @@ export default function Settings({ bridge, onApply, onClose, onAction, version =
   const [query, setQuery] = useState("");
   const [toast, setToast] = useState(false);
   const scroller = useRef(null), studio = useRef(null);
+
+  // Await async settings load
+  useEffect(() => {
+    const p = load(bridge);
+    if (p && typeof p.then === "function") {
+      p.then((result) => {
+        if (result && result.settings) {
+          setApplied(result.settings);
+          setD(result.settings);
+        }
+        setLoading(false);
+      }).catch(() => {
+        setLoading(false);
+      });
+    } else {
+      setLoading(false);
+    }
+  }, [bridge]);
 
   const dirty = useMemo(() => JSON.stringify(d) !== JSON.stringify(applied), [d, applied]);
   const c = d.colors;
@@ -679,8 +734,30 @@ export default function Settings({ bridge, onApply, onClose, onAction, version =
   const deleteTheme = (id) => setD((p) => ({ ...p, customThemes: p.customThemes.filter((t) => t.id !== id), themeId: p.themeId === id ? "custom" : p.themeId }));
   const generate = () => setD((p) => ({ ...p, themeId: "custom", colors: makeThemeFromAccent(p.colors.accent) }));
 
-  const apply = () => {
+  const apply = async () => {
     setApplied(d);
+    // Persist and apply via the bridge; the backend confirms success before
+    // we update the UI (per the settings lifecycle requirements).
+    if (bridge && typeof bridge.apply_settings === "function") {
+      try {
+        const raw = bridge.apply_settings(JSON.stringify(d));
+        if (raw) {
+          try {
+            const result = JSON.parse(raw);
+            if (result.status === "error") {
+              setToast(false);
+              // Show the backend error to the user
+              setToast(true);
+              return;
+            }
+          } catch (e) {
+            // Not JSON; treat as success
+          }
+        }
+      } catch (e) {
+        logger.error("apply_settings threw: " + e.message);
+      }
+    }
     saveToBridge(bridge, d);
     onApply?.(d);
     setToast(true);

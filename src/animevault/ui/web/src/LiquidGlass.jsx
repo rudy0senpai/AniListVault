@@ -195,8 +195,48 @@ const Chevron = () => (
   </svg>
 );
 
-/* ---------- BubbleMenu ----------
-   items: [{ label, onSelect, danger? } | { divider: true }]            */
+/* ── shared dropdown controller ───────────────────────────────
+   Single-open controller: only one BubbleMenu is open at a time.
+   Notifies the native overlay (via onOpenChange callback) when a
+   menu opens or closes. Stale-timer protection via closing flag. */
+let managedId = null;
+let managedCallback = null;
+let disposing = false;
+
+export function registerMenu(id, onOpen) {
+  managedId = id;
+  managedCallback = onOpen;
+  onOpen(true, 0);
+}
+
+export function unregisterMenu(id) {
+  if (managedId === id) {
+    managedId = null;
+    managedCallback = null;
+  }
+}
+
+export function reportMenuChange(id, open, onOpen) {
+  if (disposing) return;
+  if (managedId === id) {
+    managedCallback?.(open, 0);
+  }
+}
+
+export function closeAllMenus(onOpen) {
+  if (managedCallback) {
+    managedCallback(false, managedId);
+    managedId = null;
+    managedCallback = null;
+  }
+  onOpen(false, 0);
+}
+
+export function disposeMenus() {
+  disposing = true;
+  managedId = null;
+  managedCallback = null;
+}
 export function BubbleMenu({ label, items, variant = "glass", icon, onOpenChange }) {
   const [open, setOpen] = useState(false);
   const [closing, setClosing] = useState(false);
@@ -214,25 +254,51 @@ export function BubbleMenu({ label, items, variant = "glass", icon, onOpenChange
     }, 140);
   }, []);
 
+  // Shared controller: register menu with global single-open controller
+  useEffect(() => {
+    if (open) {
+      registerMenu(id, onOpenChange);
+    } else {
+      unregisterMenu(id);
+    }
+    return () => {
+      unregisterMenu(id);
+    };
+  }, [id, onOpenChange]);
+
+  // Outside-click dismissal
   useEffect(() => {
     if (!open) return;
-    const down = (e) => { if (!wrap.current?.contains(e.target)) close(false); };
+    const down = (e) => {
+      if (!wrap.current?.contains(e.target)) {
+        close(false);
+      }
+    };
     document.addEventListener("pointerdown", down);
     return () => document.removeEventListener("pointerdown", down);
   }, [open, close]);
 
+  // Focus the first menu item when opened
   useEffect(() => {
-    if (open) requestAnimationFrame(() => list.current?.querySelector('[role="menuitem"]')?.focus());
+    if (open) {
+      requestAnimationFrame(() => list.current?.querySelector('[role="menuitem"]')?.focus());
+    }
   }, [open]);
 
   const onTriggerKey = (e) => {
-    if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); setOpen(true); }
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      setOpen(true);
+    }
   };
 
   const onListKey = (e) => {
-    const els = [...list.current.querySelectorAll('[role="menuitem"')];
+    const els = [...list.current.querySelectorAll('[role="menuitem"]')];
     const i = els.indexOf(document.activeElement);
-    const go = (n) => { e.preventDefault(); els[(n + els.length) % els.length]?.focus(); };
+    const go = (n) => {
+      e.preventDefault();
+      els[(n + els.length) % els.length]?.focus();
+    };
     if (e.key === "ArrowDown") go(i + 1);
     else if (e.key === "ArrowUp") go(i - 1);
     else if (e.key === "Home") go(0);
@@ -247,19 +313,26 @@ export function BubbleMenu({ label, items, variant = "glass", icon, onOpenChange
     e.currentTarget.style.setProperty("--my", `${e.clientY - r.top}px`);
   };
 
+  const onTriggerClick = (e) => {
+    if (closing) return;
+    if (!open) {
+      // Open this menu; the shared controller closes all others.
+      registerMenu(id, onOpenChange);
+      setOpen(true);
+    } else {
+      // Toggle this menu closed.
+      setOpen(false);
+      close(true);
+    }
+  };
+
   let n = 0;
   return (
     <div className="lg lg-menuwrap" ref={wrap}>
       <BubbleButton
         ref={trigger} variant={variant} icon={icon}
         aria-haspopup="menu" aria-expanded={open} aria-controls={open ? id : undefined}
-        onClick={() => {
-          if (!closing) {
-            const nextOpen = !open;
-            setOpen(nextOpen);
-            if (onOpenChange) onOpenChange(nextOpen, items.length);
-          }
-        }}
+        onClick={onTriggerClick}
         onKeyDown={onTriggerKey}
       >
         {label}<Chevron />
@@ -272,7 +345,8 @@ export function BubbleMenu({ label, items, variant = "glass", icon, onOpenChange
             <button
               key={it.label} type="button" role="menuitem"
               className={`lg-item${it.danger ? " lg-item--danger" : ""}`}
-              style={{ "--i": n++ }} onPointerMove={track}
+              style={{ "--i": n++ }}
+              onPointerMove={track}
               onClick={() => { it.onSelect?.(); close(true); }}
             >
               <span className="lg-bead" /><span>{it.label}</span>
