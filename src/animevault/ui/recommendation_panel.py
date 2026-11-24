@@ -17,7 +17,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
-    QScrollArea,
     QVBoxLayout,
     QWidget,
     QSlider,
@@ -25,6 +24,7 @@ from PySide6.QtWidgets import (
 
 # The recommendation card component.
 from animevault.ui.recommendation_card import RecommendationCard
+from animevault.ui.scroll_animation import ScrollRevealArea
 
 # The engine.
 from animevault.services.recommendation_engine import RecommendationEngine
@@ -130,7 +130,7 @@ class RecommendationPanel(QFrame):
         # ── Grid ─────────────────────────────────────────────────────
         self._grid = CardGrid()
         self._grid.setObjectName("recommendationGrid")
-        scroll = QScrollArea()
+        scroll = ScrollRevealArea()
         scroll.setObjectName("recommendationScroll")
         scroll.setWidget(self._grid)
         scroll.setWidgetResizable(True)

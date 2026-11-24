@@ -5,7 +5,10 @@ a = Analysis(
     ['src/animevault/cli.py'],
     pathex=[],
     binaries=[],
-    datas=[('src/animevault/resources/media', 'src/animevault/resources/media')],
+    datas=[
+        ('src/animevault/resources/media', 'src/animevault/resources/media'),
+        ('src/animevault/ui/web/dist', 'animevault/ui/web/dist'),
+    ],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

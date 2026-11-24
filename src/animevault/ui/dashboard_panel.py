@@ -20,7 +20,6 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
     QGridLayout,
-    QScrollArea,
     QPushButton,
     QSlider,
 )
@@ -38,6 +37,7 @@ from animevault.models.literature import Literature
 from animevault.tiers import TIERS
 from animevault.ui import theme as theme_tokens
 from animevault.ui.theme import tier_color, reduce_effects, set_reduce_effects
+from animevault.ui.scroll_animation import ScrollRevealArea
 
 logger = logging.getLogger(__name__)
 
@@ -589,7 +589,7 @@ class DashboardPanel(QFrame):
         self._height_scale = 1.0
 
         # Main scroll area
-        scroll = QScrollArea()
+        scroll = ScrollRevealArea()
         scroll.setObjectName("dashboardScroll")
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -1309,3 +1309,10 @@ def compute_dashboard(animes: Optional[list] = None, literature: Optional[list] 
         "genres": genres.most_common(),
         "tiers": {t: tiers.get(t, 0) for t in TIERS},
     }
+
+
+# The old dashboard implementation remains available in the repository history
+# of this module for downstream callers, while the public page uses the
+# reference-driven, filtered analytics surface.
+from animevault.ui.dashboard_analytics import DashboardPanel as DashboardPanel
+from animevault.ui.dashboard_analytics import SummaryKpiCard as _KPICard

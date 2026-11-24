@@ -15,6 +15,7 @@ authors = [
 dependencies = [
     "pyside6>=6.6",
     "scikit-learn>=1.5",
+    "markdown>=3.11",
 ]
 
 [project.optional-dependencies]
@@ -34,6 +35,9 @@ version = { attr = "animevault._version.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+animevault = ["ui/web/dist/*", "ui/web/dist/assets/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

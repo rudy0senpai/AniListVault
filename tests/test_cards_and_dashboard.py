@@ -168,6 +168,55 @@ class TestCardSelection:
         assert card.is_selected() is False
 
 
+class TestMediaCardGradientBorder:
+    @pytest.mark.parametrize("kind", ["anime", "manga", "manhwa", "manhua"])
+    def test_card_border_renders_multiple_gradient_colors(self, qt_app, kind):
+        from PySide6.QtCore import QPoint
+        from PySide6.QtGui import QImage, QPainter
+
+        from animevault.ui.media_card import MediaCard
+
+        card = MediaCard(
+            object(), title="Gradient", type_label="TV", count_label="12 ep",
+            progress_text="0 / 12", progress_percent=0,
+            status_text="Watching", status_key="watching",
+            tier="A", poster_path="", kind=kind,
+        )
+        card.resize(400, 160)
+        # Freeze the animated edge so the offscreen render samples a stable frame.
+        card.set_effects_reduced(True)
+        card.show()
+        qt_app.processEvents()
+        image = QImage(card.size(), QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(0)
+        painter = QPainter(image)
+        card.render(painter, QPoint(0, 0))
+        painter.end()
+
+        top_border_colors = {
+            image.pixelColor(x, 1).rgba()
+            for x in range(30, image.width() - 30, 12)
+        }
+        assert len(top_border_colors) > 1
+        card.close()
+
+    def test_reduce_effects_pauses_and_resumes_border_animation(self, qt_app):
+        from PySide6.QtCore import QAbstractAnimation
+        from animevault.ui.media_card import MediaCard
+
+        card = MediaCard(
+            object(), title="Gradient", type_label="TV", count_label="12 ep",
+            progress_text="0 / 12", progress_percent=0,
+            status_text="Watching", status_key="watching",
+            tier="A", poster_path="", kind="anime",
+        )
+        card.set_effects_reduced(True)
+        assert card._border_animation.state() != QAbstractAnimation.State.Running
+        card.set_effects_reduced(False)
+        assert card._border_animation.state() == QAbstractAnimation.State.Running
+        card.close()
+
+
 class TestCardGrid:
     def test_reflows_columns_with_width(self, qt_app):
         grid = CardGrid()

@@ -22,13 +22,18 @@ from typing import Optional
 from PySide6.QtCore import (
     QEasingCurve,
     QPoint,
+    QPointF,
     QRect,
+    QRectF,
     QSize,
     Qt,
     QPropertyAnimation,
+    QVariantAnimation,
     Signal,
 )
-from PySide6.QtGui import QAction, QColor, QFont, QPainter, QPainterPath, QPixmap
+from PySide6.QtGui import (
+    QAction, QColor, QConicalGradient, QFont, QPainter, QPainterPath, QPixmap,
+)
 from PySide6.QtWidgets import (
     QFrame,
     QGraphicsDropShadowEffect,
@@ -44,8 +49,6 @@ from PySide6.QtWidgets import (
 from animevault.ui import theme as theme_tokens
 from animevault.ui.theme import (
     BORDER_GLASS,
-    GLASS_SURFACE,
-    GLASS_SURFACE_HOVER,
     tier_badge_style,
     tier_color,
     status_badge_style,
@@ -145,6 +148,19 @@ class MediaCard(QFrame):
         self._selected = False
         self._hovered = False
         self.setProperty("selected", False)
+        self._border_angle = 0.0
+        self._effects_reduced = theme_tokens.reduce_effects()
+        self.setStyleSheet(
+            "QFrame#mediaCard { background: transparent; border: none; }"
+        )
+        self._border_animation = QVariantAnimation(self)
+        self._border_animation.setStartValue(0.0)
+        self._border_animation.setEndValue(360.0)
+        self._border_animation.setDuration(7200)
+        self._border_animation.setLoopCount(-1)
+        self._border_animation.valueChanged.connect(self._set_border_angle)
+        if not self._effects_reduced:
+            self._border_animation.start()
         self._shadow_effect = QGraphicsDropShadowEffect(self)
         self._shadow_effect.setBlurRadius(8)
         self._shadow_effect.setOffset(0, 2)
@@ -297,28 +313,74 @@ class MediaCard(QFrame):
         self.setProperty("selected", selected)
         self._update_surface()
         self._check.setVisible(selected)
-        # Re-polish so the stylesheet's [selected] rule applies.
-        self.style().unpolish(self)
-        self.style().polish(self)
+
+    def set_effects_reduced(self, reduced: bool) -> None:
+        """Pause animated borders and shadows when reduced effects is enabled."""
+        self._effects_reduced = bool(reduced)
+        if self._effects_reduced:
+            self._border_animation.stop()
+        elif self._border_animation.state() != QVariantAnimation.State.Running:
+            self._border_animation.start()
+        self._update_surface()
+
+    def _set_border_angle(self, angle: object) -> None:
+        self._border_angle = float(angle)
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        """Paint the translucent card and its slowly rotating gradient edge."""
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        outer_rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        border_width = 2.0 if self._selected else 1.4
+        corner_radius = 14.0
+
+        surface_color = QColor(
+            theme_tokens.BG_SURFACE_HI if self._selected else theme_tokens.BG_SURFACE
+        )
+        surface_color.setAlpha(242 if self._selected else 232)
+        outer_path = QPainterPath()
+        outer_path.addRoundedRect(outer_rect, corner_radius, corner_radius)
+        painter.fillPath(outer_path, surface_color)
+
+        inner_rect = outer_rect.adjusted(
+            border_width, border_width, -border_width, -border_width
+        )
+        ring = QPainterPath()
+        ring.setFillRule(Qt.FillRule.OddEvenFill)
+        ring.addRoundedRect(outer_rect, corner_radius, corner_radius)
+        ring.addRoundedRect(
+            inner_rect,
+            max(0.0, corner_radius - border_width),
+            max(0.0, corner_radius - border_width),
+        )
+
+        gradient = QConicalGradient(QPointF(outer_rect.center()), self._border_angle)
+        if self._selected:
+            gradient.setColorAt(0.0, QColor(theme_tokens.ACCENT_DIM))
+            gradient.setColorAt(0.80, QColor(theme_tokens.ACCENT_DIM))
+            gradient.setColorAt(0.88, QColor(theme_tokens.ACCENT_VIOLET))
+            gradient.setColorAt(0.94, QColor(theme_tokens.ACCENT))
+            gradient.setColorAt(1.0, QColor(theme_tokens.ACCENT_DIM))
+        else:
+            gradient.setColorAt(0.0, QColor(BORDER_GLASS))
+            gradient.setColorAt(0.42, QColor(theme_tokens.BORDER))
+            gradient.setColorAt(0.80, QColor(BORDER_GLASS))
+            gradient.setColorAt(0.86, QColor(theme_tokens.ACCENT_VIOLET_DIM))
+            gradient.setColorAt(0.90, QColor(theme_tokens.ACCENT_VIOLET))
+            gradient.setColorAt(0.94, QColor(theme_tokens.ACCENT))
+            gradient.setColorAt(1.0, QColor(BORDER_GLASS))
+        painter.fillPath(ring, gradient)
+        painter.end()
 
     def refresh_art(self, poster_path: str) -> None:
         self._poster.set_art(poster_path)
 
     def _update_surface(self) -> None:
-        """Apply a translucent glass surface, selection state, and soft hover depth."""
-        border_color = (
-            theme_tokens.ACCENT if self._selected
-            else theme_tokens.ACCENT_DIM if self._hovered
-            else BORDER_GLASS
-        )
-        border_width = 2 if self._selected else 1
-        surface = GLASS_SURFACE_HOVER if self._selected else GLASS_SURFACE
-        self.setStyleSheet(
-            f"background:{surface}; border:{border_width}px solid {border_color}; "
-            "border-radius:14px;"
-        )
-
-        use_shadow = not theme_tokens.reduce_effects() and (self._selected or self._hovered)
+        """Refresh the selected/hovered border and soft shadow state."""
+        self.update()
+        use_shadow = not self._effects_reduced and (self._selected or self._hovered)
         self._shadow_effect.setEnabled(use_shadow)
         shadow = QColor(theme_tokens.ACCENT_VIOLET if self._selected else theme_tokens.ACCENT)
         shadow.setAlpha(46 if self._selected else 30)

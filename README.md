@@ -40,10 +40,10 @@ The screenshots below show the Appearance & Theme dialogue and additional librar
 
 - Separate Anime, Manga, Manhwa, and Manhua libraries, with card-based views and episode/chapter progress.
 - Personal watch/read status and tier ratings (`SSS` through `F`); provider metadata is kept distinct from personal library fields.
-- Search, filtering, sorting, multi-select, and a library overview with category, status, genre, and tier summaries.
+- Search, filtering, sorting, multi-select, and a React dashboard with live database-derived library analytics.
 - Metadata lookup, cover retrieval, caching, and background enrichment. Failed entries can be retried; no-match results and provider/poster failures are reported separately.
 - Import CSV, XLSX, and SQL dumps; export CSV, XLSX, ODS, and application-compatible SQL. A separate database backup option is available in the application.
-- Live theme selection, an option to reduce transparency/effects, and a persistent Overview panel setting.
+- Live theme selection, an option to reduce transparency/effects, and the React dashboard backed by the existing SQLite library.
 - Optional software update checking against a configured GitHub Releases API endpoint. The application does not silently install updates.
 
 ## Installation
@@ -85,7 +85,7 @@ The `animevault` console entry point is also defined by the project package.
 1. Launch the app with `python -m animevault` or the installed application entry point.
 2. Choose the **Anime**, **Manga**, **Manhwa**, or **Manhua** tab. Use **Add** to create an entry; metadata lookup can start from a title, or you can enter details manually.
 3. Open an entry's details or card controls to maintain personal status, progress, and tier/rating information.
-4. Use the search box and filters/sort controls above the library to find and organize entries. The Overview panel summarizes the collection.
+4. Use the search box and filters/sort controls above the library to find and organize entries. Open **Dashboard** from the navigation/tools menu for React charts and filters powered by the existing SQLite model records.
 5. Use **Upload** to import supported files and **Export** to export the library. Review import mappings/preview before completing an import; use the dedicated database backup option for a full SQLite backup.
 6. Open **Tools → Appearance & Theme** to search and preview palettes, apply one, and optionally reduce transparency/effects.
 7. Use **Fetch Missing Data** to enrich incomplete entries and **Retry Failed** for previously failed items. The enrichment summary distinguishes provider errors, unmatched titles, and poster failures.
@@ -129,6 +129,16 @@ pytest tests/ -q
 ```
 
 The test suite uses pytest and is designed to run without opening the application UI. Contributions should keep changes focused, add or update tests for behavior changes, and avoid committing local databases, secrets, or generated build artifacts. No separate contribution guide was found in the repository.
+
+The embedded React library is built with Vite from `src/animevault/ui/web/`:
+
+```bash
+cd src/animevault/ui/web
+npm install
+npm run build
+```
+
+For browser development, run `npm run dev` in that directory and start AnimeVault with `ANIMEVAULT_DEV_URL=http://127.0.0.1:5173`. Set `ANIMEVAULT_GLASS_CARDS=0` to use the native card grid; the saved Qt setting `ui/glass_cards` also defaults to enabled. The generated `dist/` bundle is ignored by Git and included in packaging after the build.
 
 ## License
 

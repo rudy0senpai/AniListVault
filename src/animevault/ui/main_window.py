@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import logging
+import os
+from collections import Counter
 from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import QSize, Qt, Signal, QSettings
-from PySide6.QtGui import QAction, QKeySequence, QShortcut
+from PySide6.QtGui import QAction, QKeySequence, QShortcut, QColor
+from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
@@ -24,6 +27,7 @@ from PySide6.QtWidgets import (
     QStackedWidget,
     QVBoxLayout,
     QWidget,
+    QDialog,
 )
 
 from animevault.media_types import (
@@ -39,16 +43,24 @@ from animevault.models.literature import Literature
 from animevault.tiers import TIERS
 from animevault.ui.card_factory import anime_card, literature_card
 from animevault.ui.card_grid import CardGrid
+from animevault.ui.media_card import MediaCard
+from animevault.ui.dashboard_analytics import SummaryKpiCard
 from animevault.ui.details_dialog import DetailsDialog
 from animevault.ui.add_media_dialog import AddMediaDialog
-from animevault.ui.overview_panel import OverviewPanel
 
 from animevault.ui.video_background import DEFAULT_OPACITY as BACKGROUND_OPACITY
 from animevault.ui.video_background import VideoBackground
 from animevault.ui.theme import application_stylesheet
 from animevault.ui.visual_effects import HoverLiftButton, RadialGradientLabel
+from animevault.ui.scroll_animation import ScrollRevealArea
 
-logger = logging.getLogger(__name__)
+# Services
+from animevault.services.backup_service import backup_database
+from animevault.services.cache_service import CacheService
+from animevault.services.notification_service import NotificationService
+from animevault.services.update_service import UpdateService, view_licenses
+from animevault.ui.settings_service import SettingsService, Settings
+from animevault.ui.settings_panel import SettingsPanel
 
 #: Sort modes offered in the Sort control.
 SORT_OPTIONS = [
@@ -88,6 +100,16 @@ class MainWindow(QMainWindow):
         self._sort_mode = "title"
         self._select_mode = False
         self._settings = QSettings("AnimeVault", "AnimeVault")
+        self._glass_cards_enabled = self._settings.value("ui/glass_cards", True, type=bool)
+        if os.environ.get("ANIMEVAULT_GLASS_CARDS", "").strip() in {"0", "false", "off"}:
+            self._glass_cards_enabled = False
+        self._web_selected: list = []
+        self._web_view = None
+        self._menu_web_view = None
+        self._navbar_web_view = None
+        self._topbar_available = False
+        self._shared_bridge = None
+        self._web_view_class = None
 
         self._build_ui()
         self._build_shortcuts()
@@ -109,120 +131,70 @@ class MainWindow(QMainWindow):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        # Looping video background sits behind everything and ignores input.
+        # Video background sits behind the shared React surfaces and ignores input.
         self._background = VideoBackground(central, opacity=BACKGROUND_OPACITY)
         self._background.setGeometry(central.rect())
         self._background.raise_()
 
-        outer.addWidget(self._build_header())
-        outer.addWidget(self._build_toolbar())
+        dev_url = os.environ.get("ANIMEVAULT_DEV_URL", "").strip()
+        web_dist = Path(__file__).parent / "web" / "dist" / "index.html"
+        if dev_url or web_dist.is_file():
+            try:
+                from animevault.ui.web_view import AnimeWebView, LibraryBridge
+                self._web_view_class = AnimeWebView
+                self._shared_bridge = LibraryBridge(self)
+            except Exception:
+                logger.exception("React toolbar bridge unavailable; using native toolbar")
+
+        navbar = self._build_navbar()
+        toolbar = self._build_toolbar()
+        header = self._build_header()
+        outer.addWidget(navbar)
+        outer.addWidget(header)
+        outer.addWidget(toolbar)
         outer.addWidget(self._build_search_row())
 
-        # Body: stacked pages (Library / Dashboard)
+        # The single embedded React surface hosts both Library and Dashboard.
         self._stack = QStackedWidget()
         self._stack.setObjectName("mainStack")
 
-        # Library page: grid + overview
+        # Library page: poster grid; summary metrics live in the shared top header.
         library_page = QWidget()
         library_page.setObjectName("libraryPage")
         body = QHBoxLayout(library_page)
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(0)
         self._body = body
-
         self._grid = CardGrid()
-        body.addWidget(self._grid, 1)
-
-        self._overview_container = QWidget()
-        overview_layout = QVBoxLayout(self._overview_container)
-        overview_layout.setContentsMargins(0, 0, 0, 0)
-        overview_layout.setSpacing(2)
-        self._overview_header = QWidget()
-        self._overview_header.setObjectName("overviewHeader")
-        overview_header_layout = QHBoxLayout(self._overview_header)
-        overview_header_layout.setContentsMargins(14, 8, 14, 0)
-        overview_header_layout.setSpacing(8)
-        self._overview_title = QLabel("Overview")
-        self._overview_title.setObjectName("panelTitle")
-        overview_header_layout.addWidget(self._overview_title)
-        overview_header_layout.addStretch(1)
-        self._overview_toggle = QPushButton(">>")
-        self._overview_toggle.setObjectName("overviewToggle")
-        self._overview_toggle.setFixedSize(34, 28)
-        self._overview_toggle.setToolTip("Hide overview")
-        self._overview_toggle.setAccessibleName("Hide overview")
-        self._overview_toggle.clicked.connect(self._toggle_overview)
-        overview_header_layout.addWidget(self._overview_toggle)
-        overview_layout.addWidget(self._overview_header)
-
-        self._overview = OverviewPanel()
-        self._overview_scroll = QScrollArea()
-        self._overview_scroll.setObjectName("overviewScroll")
-        self._overview_scroll.setStyleSheet("background: transparent; border: none;")
-        self._overview_scroll.viewport().setStyleSheet("background: transparent;")
-        self._overview_scroll.setWidgetResizable(True)
-        self._overview_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self._overview_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self._overview_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self._overview_scroll.setMinimumWidth(0)
-        self._overview_scroll.setWidget(self._overview)
-        overview_layout.addWidget(self._overview_scroll, 1)
-        body.addWidget(self._overview_container)
+        self._library_surface = QStackedWidget()
+        self._library_surface.addWidget(self._grid)
+        dev_url = os.environ.get("ANIMEVAULT_DEV_URL", "").strip()
+        web_dist = Path(__file__).parent / "web" / "dist" / "index.html"
+        if dev_url or web_dist.is_file():
+            try:
+                from animevault.ui.web_view import AnimeWebView
+                self._web_view_class = AnimeWebView
+                if self._shared_bridge is None:
+                    from animevault.ui.web_view import LibraryBridge
+                    self._shared_bridge = LibraryBridge(self)
+                self._web_view = AnimeWebView(self, bridge=self._shared_bridge, surface="library")
+                self._library_surface.addWidget(self._web_view)
+                self._library_surface.setCurrentWidget(self._web_view)
+            except Exception:
+                logger.exception("Glass library unavailable; using native card grid")
+                self._web_view = None
+        body.addWidget(self._library_surface, 1)
 
         self._stack.addWidget(library_page)  # page 0
-
-        # Dashboard page
-        from animevault.ui.dashboard_panel import DashboardPanel
-
-        try:
-            self._dashboard = DashboardPanel()
-            self._dashboard.refresh_requested.connect(self._refresh_dashboard)
-            self._dashboard.back_requested.connect(self._show_library)
-            self._stack.addWidget(self._dashboard)  # page 1
-        except Exception as e:
-            logger.exception("Failed to create dashboard panel: %s", e)
-            self._dashboard = None
-            # Add a placeholder widget so the stack still has 2 pages
-            placeholder = QWidget()
-            placeholder_layout = QVBoxLayout(placeholder)
-            placeholder_layout.addWidget(QLabel("Dashboard unavailable."))
-            self._stack.addWidget(placeholder)
+        self._dashboard = None
 
         outer.addWidget(self._stack, 1)
 
-        # Keep the background sized to the window, and behind the content.
+        # Keep the animated background behind the content and size it with the window.
         self._background.lower()
         central.installEventFilter(self)
-        visible = self._settings.value("ui/overview_visible", True, type=bool)
-        self._set_overview_visible(visible, persist=False)
-
-    def _set_overview_visible(self, visible: bool, *, persist: bool = True) -> None:
-        self._overview.setVisible(visible)
-        self._overview_title.setVisible(visible)
-        header_layout = self._overview_header.layout()
-        header_layout.setContentsMargins(14, 8, 14, 0) if visible else header_layout.setContentsMargins(0, 8, 0, 0)
-        header_layout.setSpacing(8 if visible else 0)
-        if visible:
-            # The overview contains multi-column KPIs and charts; below this
-            # width their labels and chart legends are clipped rather than
-            # reflowing. Keep a usable sidebar width while letting it grow.
-            self._overview_container.setMinimumWidth(400)
-            self._overview_container.setMaximumWidth(520)
-            self._overview_toggle.setText(">>")
-            self._overview_toggle.setToolTip("Hide Overview")
-            self._overview_toggle.setAccessibleName("Hide Overview")
-        else:
-            self._overview_container.setFixedWidth(42)
-            self._overview_toggle.setText("<<")
-            self._overview_toggle.setToolTip("Show Overview")
-            self._overview_toggle.setAccessibleName("Show Overview")
-        if persist:
-            self._settings.setValue("ui/overview_visible", visible)
-            self._settings.sync()
-
-    def _toggle_overview(self) -> None:
-        """Hide the statistics sidebar while retaining a narrow restore control."""
-        self._set_overview_visible(self._overview.isHidden())
+        # Overview has been removed from the visible library layout; its compact
+        # summary values are now part of the shared header strip.
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
@@ -239,10 +211,16 @@ class MainWindow(QMainWindow):
     def _build_header(self) -> QWidget:
         header = QWidget()
         header.setObjectName("headerBar")
-        header.setFixedHeight(62)
-        row = QHBoxLayout(header)
-        row.setContentsMargins(18, 10, 18, 10)
-        row.setSpacing(20)
+        header.setFixedHeight(50 if self._topbar_available else 102)
+        root = QVBoxLayout(header)
+        root.setContentsMargins(18, 5, 18, 5)
+        root.setSpacing(3)
+
+        nav_row = QWidget()
+        nav_row.setObjectName("headerNavigationRow")
+        row = QHBoxLayout(nav_row)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(12)
 
         icon = QLabel("◐")
         icon.setObjectName("appIcon")
@@ -251,58 +229,114 @@ class MainWindow(QMainWindow):
         title = RadialGradientLabel("AnimeVault")
         title.setObjectName("appTitle")
         row.addWidget(title)
+        row.addSpacing(10)
 
-        row.addSpacing(16)
-
-        # Navigation tabs
         self._nav_buttons: dict[str, QPushButton] = {}
         for category in (MEDIA_ANIME, MEDIA_MANGA, MEDIA_MANHWA, MEDIA_MANHUA):
             button = QPushButton(CATEGORY_LABELS[category])
             button.setObjectName("navTab")
             button.setCheckable(True)
             button.setCursor(Qt.CursorShape.PointingHandCursor)
-            button.clicked.connect(
-                lambda _checked, c=category: self._on_category_changed(c)
-            )
+            button.clicked.connect(lambda _checked, c=category: self._on_category_changed(c))
             self._nav_buttons[category] = button
             row.addWidget(button)
         self._nav_buttons[MEDIA_ANIME].setChecked(True)
-
         row.addStretch()
 
         settings = QPushButton("⚙")
         settings.setObjectName("settingsButton")
-        settings.setFixedSize(40, 40)
+        settings.setFixedSize(38, 38)
         settings.setToolTip("Settings")
-        settings.clicked.connect(self._show_settings)
+        settings.clicked.connect(self._show_settings_panel)
         row.addWidget(settings)
+        if self._topbar_available:
+            nav_row.hide()  # React Liquid Glass surface owns title, tabs and settings.
+        root.addWidget(nav_row)
 
+        summary_scroll = QScrollArea()
+        summary_scroll.setObjectName("headerSummaryScroll")
+        summary_scroll.setWidgetResizable(True)
+        summary_scroll.setFixedHeight(38)
+        summary_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        summary_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        summary_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        summary_scroll.setStyleSheet("background: transparent; border: none;")
+        summary_scroll.viewport().setStyleSheet("background: transparent;")
+        summary_content = QWidget()
+        summary_layout = QHBoxLayout(summary_content)
+        summary_layout.setContentsMargins(0, 0, 0, 0)
+        summary_layout.setSpacing(6)
+        summary_fields = (
+            ("anime_total", "Anime"),
+            ("anime_watching", "Watching"),
+            ("anime_completed", "Completed"),
+            ("anime_planned", "Plan to Watch"),
+            ("manga_total", "Manga"),
+            ("manhwa_total", "Manhwa"),
+            ("manhua_total", "Manhua"),
+        )
+        self._summary_kpis: dict[str, SummaryKpiCard] = {}
+        for key, label in summary_fields:
+            card = SummaryKpiCard(label, "0")
+            self._summary_kpis[key] = card
+            summary_layout.addWidget(card)
+        summary_scroll.setWidget(summary_content)
+        root.addWidget(summary_scroll)
         return header
 
+
     def _build_toolbar(self) -> QWidget:
+        native_toolbar = self._build_native_toolbar()
+        self._native_toolbar = native_toolbar
+        if self._navbar_web_view is None or self._shared_bridge is None:
+            return native_toolbar
+        native_toolbar.hide()
+        try:
+            self._menu_web_view = self._web_view_class(self, bridge=self._shared_bridge, surface="toolbar")
+            self._menu_web_view.setObjectName("liquidGlassMenuBar")
+            self._menu_web_view.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+            self._menu_web_view.setFixedHeight(60)
+            self._topbar_available = True
+            return self._menu_web_view
+        except Exception:
+            logger.exception("React Liquid Glass menu bar unavailable; using native toolbar")
+            native_toolbar.show()
+            self._topbar_available = False
+            self._navbar_web_view.hide()
+            return native_toolbar
+
+    def _build_navbar(self) -> QWidget:
+        if self._web_view_class is None or self._shared_bridge is None:
+            placeholder = QWidget()
+            placeholder.setFixedHeight(0)
+            return placeholder
+        try:
+            self._navbar_web_view = self._web_view_class(
+                self, bridge=self._shared_bridge, surface="nav"
+            )
+            self._navbar_web_view.setObjectName("liquidGlassNavigationBar")
+            self._navbar_web_view.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+            self._navbar_web_view.setFixedHeight(60)
+            return self._navbar_web_view
+        except Exception:
+            logger.exception("React Liquid Glass navigation tabs unavailable")
+            self._web_view_class = None
+            self._shared_bridge = None
+            placeholder = QWidget()
+            placeholder.setFixedHeight(0)
+            return placeholder
+
+    def _set_menu_bar_height(self, height: int) -> None:
+        if self._menu_web_view is not None:
+            self._menu_web_view.setFixedHeight(max(60, min(560, int(height))))
+
+    def _build_native_toolbar(self) -> QWidget:
         toolbar = QWidget()
         toolbar.setObjectName("toolBar")
         toolbar.setFixedHeight(44)
         row = QHBoxLayout(toolbar)
         row.setContentsMargins(18, 5, 18, 5)
         row.setSpacing(6)
-
-        file_menu_btn = QPushButton("File")
-        file_menu_btn.setObjectName("toolButton")
-        menu = QMenu(file_menu_btn)
-        import_xlsx = menu.addAction("Import Excel (.xlsx)…")
-        import_csv = menu.addAction("Import CSV (.csv)…")
-        import_sql = menu.addAction("Import SQL Dump (.sql)…")
-        menu.addSeparator()
-        export_csv = menu.addAction("Export to CSV…")
-        export_xlsx = menu.addAction("Export to Excel (.xlsx)…")
-        export_ods = menu.addAction("Export to OpenDocument (.ods)…")
-        export_sql = menu.addAction("Export to SQL Dump…")
-        menu.addSeparator()
-        backup_action = menu.addAction("Back Up Database")
-        quit_action = menu.addAction("Quit")
-        file_menu_btn.setMenu(menu)
-        row.addWidget(file_menu_btn)
 
         tools_btn = QPushButton("Tools")
         tools_btn.setObjectName("toolButton")
@@ -325,6 +359,7 @@ class MainWindow(QMainWindow):
         help_btn.setObjectName("toolButton")
         help_menu = QMenu(help_btn)
         about = help_menu.addAction("About AnimeVault")
+        doc_action = help_menu.addAction("Documentation (README)")
         help_btn.setMenu(help_menu)
         row.addWidget(help_btn)
 
@@ -374,28 +409,10 @@ class MainWindow(QMainWindow):
 
         row.addStretch()
 
-        # Connect menu actions
-        for action in (import_xlsx, upload_xlsx):
-            action.triggered.connect(self._on_import_xlsx)
-        for action in (import_csv, upload_csv):
-            action.triggered.connect(self._on_import_csv)
-        for action in (import_sql, upload_sql):
-            action.triggered.connect(self._on_import_sql)
-        for action in (export_csv, export_csv_btn):
-            action.triggered.connect(lambda: self._on_export("csv"))
-        for action in (export_xlsx, export_xlsx_btn):
-            action.triggered.connect(lambda: self._on_export("xlsx"))
-        for action in (export_ods, export_ods_btn):
-            action.triggered.connect(lambda: self._on_export("ods"))
-        for action in (export_sql, export_sql_btn):
-            action.triggered.connect(lambda: self._on_export("sql"))
-        backup_action.triggered.connect(self._on_backup)
-        quit_action.triggered.connect(self._quit)
-        fetch_missing.triggered.connect(lambda: self._on_bulk_enrich(False))
-        refresh_all.triggered.connect(lambda: self._on_bulk_enrich(True))
-        cloud_sync.triggered.connect(self._on_cloud_sync)
-        about.triggered.connect(self._show_about)
-        dashboard_action.triggered.connect(self._show_dashboard)
+        # Note: File menu items (Import/Export/Backup/Quit) were removed per
+        # user requirements. Tools, Help, Recommendations, Upload, Export,
+        # Delete, Select, Fetch Missing Data, Retry Failed are the remaining
+        # toolbar controls (defined above).
 
         return toolbar
 
@@ -483,6 +500,11 @@ class MainWindow(QMainWindow):
     # ── Card wiring ────────────────────────────────────────────────
 
     def _apply_cards(self, cards: list) -> None:
+        if self._web_view is not None:
+            # The sorted/filtered models come from Python; React is display-only.
+            self._web_view.bridge.replace_library([card.item for card in cards])
+            self._delete_button.setEnabled(bool(self._web_selected))
+            return
         for card in cards:
             card.details_requested.connect(self._on_details)
             card.edit_requested.connect(self._on_edit)
@@ -491,6 +513,21 @@ class MainWindow(QMainWindow):
             card.selection_changed.connect(self._on_card_selected)
             card.set_select_mode(self._select_mode)
         self._grid.set_cards(cards)
+
+    def _on_web_selection_mode_changed(self, enabled: bool) -> None:
+        self._select_mode = bool(enabled)
+        button = getattr(self, "_select_button", None)
+        if button is not None:
+            previous = button.blockSignals(True)
+            button.setChecked(self._select_mode)
+            button.setText("✓  Selecting" if self._select_mode else "✓  Select")
+            button.blockSignals(previous)
+        for card in getattr(self._grid, "cards", []):
+            card.set_select_mode(self._select_mode)
+
+    def _on_web_selection_changed(self, selected: list) -> None:
+        self._web_selected = list(selected)
+        self._delete_button.setEnabled(bool(self._web_selected))
 
     def _on_card_selected(self, _item, _selected) -> None:
         """Enable the toolbar Delete button once anything is selected."""
@@ -511,6 +548,8 @@ class MainWindow(QMainWindow):
         )
         self._add_button.setText(f"＋  Add {CATEGORY_LABELS[category]}")
         self._populate_type_filter()
+        if self._shared_bridge is not None:
+            self._shared_bridge.categoryChanged.emit(category)
         self.refresh()
 
     def _on_search_changed(self, text: str) -> None:
@@ -539,6 +578,12 @@ class MainWindow(QMainWindow):
 
     def _on_select_toggled(self, enabled: bool) -> None:
         self._select_mode = enabled
+        if self._web_view is not None:
+            self._web_selected = []
+            self._web_view.bridge.setSelectionMode(enabled)
+            self._delete_button.setEnabled(False)
+            self._select_button.setText("✓  Selecting" if enabled else "✓  Select")
+            return
         for card in self._grid.cards:
             card.set_select_mode(enabled)
             if not enabled:
@@ -635,20 +680,39 @@ class MainWindow(QMainWindow):
         return sorted(items, key=lambda i: i.title.casefold())
 
     def refresh(self) -> None:
-        """Reload from the database and rebuild the grid + sidebar."""
+        """Reload library data, update header summaries, and refresh analytics."""
         items, animes, literature = self._load_items()
 
-        if self._category == MEDIA_ANIME:
-            cards = [anime_card(i) for i in items]
+        if self._web_view is not None:
+            self._web_view.bridge.replace_library(items)
+            self._delete_button.setEnabled(bool(self._web_selected))
         else:
-            cards = [literature_card(i) for i in items]
-        self._apply_cards(cards)
+            if self._category == MEDIA_ANIME:
+                cards = [anime_card(i) for i in items]
+            else:
+                cards = [literature_card(i) for i in items]
+            self._apply_cards(cards)
+        self._update_header_summary(animes, literature)
 
-        self._overview.refresh(animes, literature)
-
-        # Also refresh the dashboard if it has been shown
-        if hasattr(self, '_dashboard') and self._dashboard is not None:
+        if self._dashboard is not None:
             self._dashboard.refresh(animes, literature)
+
+    def _update_header_summary(self, animes, literature) -> None:
+        statuses = Counter(str(getattr(item, "status", "") or "").casefold() for item in animes)
+        counts = Counter(str(getattr(item, "category", "") or "").casefold() for item in literature)
+        values = {
+            "anime_total": len(animes),
+            "anime_watching": statuses["watching"],
+            "anime_completed": statuses["completed"],
+            "anime_planned": statuses["plan_to_watch"],
+            "manga_total": counts[MEDIA_MANGA],
+            "manhwa_total": counts[MEDIA_MANHWA],
+            "manhua_total": counts[MEDIA_MANHUA],
+        }
+        for key, value in values.items():
+            card = getattr(self, "_summary_kpis", {}).get(key)
+            if card is not None:
+                card.set_value(value)
 
     # ── Actions ────────────────────────────────────────────────────
 
@@ -684,12 +748,13 @@ class MainWindow(QMainWindow):
             self.library_changed.emit()
 
     def _on_delete_selected(self) -> None:
-        selected = [c for c in self._grid.cards if c.is_selected()]
+        selected = self._web_selected if self._web_view is not None else [c for c in self._grid.cards if c.is_selected()]
         if not selected:
             return
-        names = "\n".join(f"• {c.item.title}" for c in selected[:10])
-        if len(selected) > 10:
-            names += f"\n… and {len(selected) - 10} more"
+        selected_items = [item if self._web_view is not None else item.item for item in selected]
+        names = "\n".join(f"• {item.title}" for item in selected_items[:10])
+        if len(selected_items) > 10:
+            names += f"\n… and {len(selected_items) - 10} more"
         reply = QMessageBox.question(
             self,
             "Delete",
@@ -700,8 +765,8 @@ class MainWindow(QMainWindow):
         )
         if reply != QMessageBox.StandardButton.Yes:
             return
-        for card in selected:
-            card.item.delete()
+        for item in selected_items:
+            item.delete()
         self._on_select_toggled(False)
         self.library_changed.emit()
 
@@ -712,6 +777,15 @@ class MainWindow(QMainWindow):
         self._delete_button.setEnabled(
             any(c.is_selected() for c in self._grid.cards)
         )
+
+    def _toggle_selection_mode(self) -> None:
+        self._select_mode = not self._select_mode
+        if self._web_view is not None:
+            self._web_view.bridge.setSelectionMode(self._select_mode)
+            self._delete_button.setEnabled(False)
+            self._select_button.setText("✓  Selecting" if self._select_mode else "✓  Select")
+        else:
+            self._on_select_toggled(self._select_mode)
 
     # ── Import ─────────────────────────────────────────────────────
 
@@ -862,7 +936,10 @@ class MainWindow(QMainWindow):
             )
 
     def _on_poster_ready(self, item_id: int, path: str) -> None:
-        """Update the visible card as soon as its cover is available."""
+        """Update visible cards when the existing poster worker completes."""
+        if self._web_view is not None:
+            self._web_view.bridge.update_poster(item_id, path)
+            return
         for card in self._grid.cards:
             item = getattr(card, "item", None)
             if getattr(item, "id", None) != item_id:
@@ -885,6 +962,8 @@ class MainWindow(QMainWindow):
         all_items = Anime.all() + Literature.all()
         self._failed_items = [item for item in all_items if getattr(item, "id", None) in failed_ids]
         self._retry_failed_button.setEnabled(bool(self._failed_items))
+        if self._shared_bridge is not None:
+            self._shared_bridge.retryAvailableChanged.emit(bool(self._failed_items))
 
         summary = (
             f"Total records: {stats.get('total', 0)}  |  Unique titles: {stats.get('unique_titles', 0)}  |  Tasks: {stats.get('total_tasks', 0)}\n"
@@ -918,6 +997,8 @@ class MainWindow(QMainWindow):
         retry_items = list(self._failed_items)
         self._failed_items = []
         self._retry_failed_button.setEnabled(False)
+        if self._shared_bridge is not None:
+            self._shared_bridge.retryAvailableChanged.emit(False)
         self._on_bulk_enrich(False, items=retry_items)
 
     def _export_enrichment_report(self) -> None:
@@ -968,12 +1049,158 @@ class MainWindow(QMainWindow):
             "Built with PySide6 and SQLite.",
         )
 
+    def _show_readme(self) -> None:
+        """Open the README.md documentation in a web view rendered as GitHub-flavored markdown."""
+        from html import escape
+
+        readme_path = Path(__file__).parent.parent.parent.parent / "README.md"
+        if not readme_path.is_file():
+            readme_path = Path.cwd() / "README.md"
+
+        if not readme_path.is_file():
+            QMessageBox.critical(self, "Documentation", f"README.md not found at: {readme_path}")
+            return
+
+        # Convert README.md to HTML with GitHub-flavored markdown styling
+        markdown_content = readme_path.read_text(encoding="utf-8")
+        html_content = markdown.markdown(markdown_content, extensions=["gfm"])
+
+        # Self-contained HTML document with GitHub-style markdown rendering
+        doc = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>README - AnimeVault</title>
+<style>
+  :root {{
+    color-scheme: light dark;
+  }}
+  * {{
+    box-sizing: border-box;
+  }}
+  body {{
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    color: #24292f;
+    background: #fff;
+    margin: 0;
+    padding: 2rem 1rem;
+    line-height: 1.6;
+  }}
+  h1 {{
+    font-size: 2em;
+    border-bottom: 1px solid #eaecef;
+    padding-bottom: 0.3em;
+  }}
+  h2 {{
+    font-size: 1.5em;
+    border-bottom: 1px solid #eaecef;
+    padding-bottom: 0.3em;
+  }}
+  h3 {{
+    font-size: 1.25em;
+  }}
+  a {{
+    color: #0366d6;
+    text-decoration: none;
+  }}
+  a:hover {{
+    text-decoration: underline;
+  }}
+  code {{
+    background: #f6f8fa;
+    border-radius: 3px;
+    font-family: "SF Mono", "Consolas", "Liberation Mono", Menlo, monospace;
+    font-size: 85%;
+  }}
+  pre {{
+    background: #282c34;
+    color: #abb2bf;
+    border-radius: 6px;
+    padding: 0.75rem 1rem;
+  }}
+  pre code {{
+    background: none;
+    color: inherit;
+    font-size: 100%;
+    padding: 0;
+  }}
+  blockquote {{
+    border-left: 4px solid #dfe2e5;
+    padding: 0 1rem;
+    color: #6a737d;
+    margin: 0;
+  }}
+  ul, ol {{
+    padding-left: 2em;
+  }}
+  li {{
+    margin-bottom: 0.25em;
+  }}
+  hr {{
+    border: 0;
+    border-top: 1px solid #eaecef;
+  }}
+  table {{
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1rem 0;
+  }}
+  th, td {{
+    border: 1px solid #dfe2e5;
+    padding: 0.5rem 0.75rem;
+    text-align: left;
+  }}
+  th {{
+    background: #f6f8fa;
+    font-weight: 600;
+  }}
+  img {{
+    max-width: 100%;
+    border-radius: 6px;
+  }}
+  .markdown-body {{
+    max-width: 800px;
+    margin: 0 auto;
+  }}
+  .scrollable {{
+    max-height: 600px;
+    overflow-y: auto;
+  }}
+</style>
+</head>
+<body>
+<div class="markdown-body">
+{html_content}
+</div>
+</body>
+</html>"""
+        # Use a plain QWebEngineView to display the documentation
+        doc_view = QWebEngineView(self)
+        doc_view.setHtml(doc)
+        doc_view.page().setBackgroundColor(QColor(0, 0, 0, 0))
+        doc_view.setStyleSheet("background: transparent;")
+
+        dialog = QDialog(self)
+        dialog.setObjectName("readmeDialog")
+        dialog.setWindowTitle("README - AnimeVault")
+        dialog.resize(900, 700)
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(doc_view)
+        dialog.exec()
+
 # (theme-change callbacks were retired with the 26-theme system)
 
     def _on_effects_changed(self, reduced: bool) -> None:
-        from animevault.ui.theme import liquid_glass, reduce_effects
+        from animevault.ui.theme import liquid_glass, set_reduce_effects
 
+        set_reduce_effects(reduced)
         self._background.set_effects_reduced(reduced)
+        for scroll_area in self.findChildren(ScrollRevealArea):
+            scroll_area.set_effects_reduced(reduced)
+        for card in self.findChildren(MediaCard):
+            card.set_effects_reduced(reduced)
         self._set_liquid_glass(liquid_glass())
 
     def _set_liquid_glass(self, enabled: bool) -> None:
@@ -988,43 +1215,139 @@ class MainWindow(QMainWindow):
         self._set_liquid_glass(enabled)
 
     def _show_dashboard(self) -> None:
-        """Show the Library Dashboard page (page 1)."""
-        if self._dashboard is None:
-            QMessageBox.warning(self, "Dashboard", "Dashboard is not available.")
+        """Open the React dashboard rendered from the Python model bridge."""
+        if self._web_view is None:
+            QMessageBox.warning(self, "Dashboard", "The React dashboard requires the embedded WebEngine library surface.")
             return
         try:
-            self._stack.setCurrentIndex(1)
-            self._refresh_dashboard()
+            self._stack.setCurrentIndex(0)
+            self._web_view.page().runJavaScript("window.dispatchEvent(new Event('animevault:dashboard'))")
         except Exception as e:
             logger.exception("Failed to show dashboard: %s", e)
             QMessageBox.critical(self, "Dashboard Error", f"Failed to show dashboard: {e}")
 
     def _show_library(self) -> None:
-        """Return to the Library page (page 0) and refresh."""
+        """Return to the React library and refresh its current query."""
         try:
             self._stack.setCurrentIndex(0)
+            if self._web_view is not None:
+                self._web_view.page().runJavaScript("window.dispatchEvent(new Event('animevault:library'))")
             self.refresh()
         except Exception as e:
             logger.exception("Failed to show library: %s", e)
 
     def _refresh_dashboard(self) -> None:
-        """Refresh the dashboard with current library data."""
-        if self._dashboard is not None:
-            try:
-                from animevault.models.anime import Anime
-                from animevault.models.literature import Literature
-                self._dashboard.refresh(Anime.all(), Literature.all())
-            except Exception as e:
-                logger.exception("Failed to refresh dashboard: %s", e)
+        """Request fresh data through the React/Python dashboard bridge."""
+        if self._web_view is not None:
+            self._web_view.bridge.dashboardChanged.emit()
 
-    def _show_settings(self) -> None:
-        from animevault.ui.theme_dialog import ThemeSettingsDialog
+    def _on_settings_changed(self, settings_json: str) -> None:
+        """Handle settings change from the React settings UI."""
+        try:
+            settings = json.loads(settings_json)
+            self._settings_panel.save_settings(settings)
+        except (json.JSONDecodeError, ValueError) as exc:
+            logger.warning("Invalid settings JSON: %s", exc)
 
-        dialog = ThemeSettingsDialog(self)
+    def _on_settings_applied(self, settings_json: str) -> None:
+        """Handle settings apply from the React settings UI."""
+        try:
+            settings = json.loads(settings_json)
+            self._settings_panel.save_settings(settings)
+        except (json.JSONDecodeError, ValueError) as exc:
+            logger.warning("Invalid settings JSON: %s", exc)
+
+    def _on_settings_action(self, action_id: str) -> None:
+        """Handle a settings action button click."""
+        logger.info("Settings action from UI: %s", action_id)
+        if action_id == "data.backupNow":
+            self._on_backup()
+        elif action_id == "data.clearCache":
+            self._on_clear_cache()
+        elif action_id == "about.update":
+            self._on_check_for_updates()
+        elif action_id == "about.licenses":
+            self._on_view_licenses()
+
+    def _show_settings_panel(self) -> None:
+        """Open the LiquidGlass settings panel as a dialog."""
+        from animevault.services.backup_service import backup_database
+        from animevault.services.cache_service import CacheService
+        from animevault.services.notification_service import NotificationService
+        from animevault.services.update_service import UpdateService, view_licenses
+        from animevault.ui.settings_service import SettingsService, Settings
+        from animevault.ui.settings_panel import SettingsPanel
+
+        panel = SettingsPanel(self)
+        self._settings_panel = panel
+
+        settings = Settings()
+        self._settings_service = SettingsService()
+
+        dialog = QDialog(self)
+        dialog.setObjectName("settingsPanelDialog")
+        dialog.setWindowTitle("Settings")
+        dialog.resize(960, 700)
+
+        # React web view for the LiquidGlass settings UI
+        from animevault.ui.web_view import AnimeWebView
+
+        self._settings_view = AnimeWebView(self, bridge=panel.bridge, surface="settings")
+        self._settings_view.setObjectName("settingsGlassView")
+        self._settings_view.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self._settings_view)
+
+        # Bottom action bar
+        action_bar = QHBoxLayout()
+        action_bar.setContentsMargins(8, 8, 8, 8)
+        apply_btn = BubbleButton("Apply", variant="accent", style_sheet="min-width:100px;")
+        apply_btn.clicked.connect(self._on_apply_settings)
+        action_bar.addWidget(apply_btn)
+        close_btn = BubbleButton("Close", style_sheet="min-width:100px;")
+        close_btn.clicked.connect(dialog.reject)
+        action_bar.addWidget(close_btn)
+        layout.addLayout(action_bar)
+
         dialog.exec()
-        from animevault.ui.theme import liquid_glass, reduce_effects
-        self._background.set_effects_reduced(reduce_effects())
-        self._set_liquid_glass(liquid_glass())
+
+    def _on_apply_settings(self) -> None:
+        """Handle Apply button click from settings dialog."""
+        if self._settings_view is not None and self._settings_view.bridge is not None:
+            self._settings_view.bridge.apply_settings()
+
+    def _on_clear_cache(self) -> None:
+        """Handle cache clearing."""
+        count = self._settings_panel.clear_cache()
+        self.statusMessage(f"Cache cleared ({count} files removed)")
+        self._show_status_notification(f"Cache cleared ({count} files removed)")
+
+    def _on_check_for_updates(self) -> None:
+        """Check for updates."""
+        has_update, version = self._settings_panel.check_for_updates()
+        if has_update:
+            self.statusMessage(f"Update available: {version}")
+            self._show_status_notification(f"Update available: {version}")
+        else:
+            self.statusMessage("You are on the latest version")
+            self._show_status_notification("You are on the latest version")
+
+    def _on_view_licenses(self) -> None:
+        """Display open-source licenses."""
+        self._settings_panel.view_licenses()
+        self.statusMessage("Licenses dialog displayed")
+
+    def _show_status_notification(self, message: str, level: str = "info") -> None:
+        """Show a status message to the user."""
+        if self.parent() is not None:
+            self.parent().statusMessage(message, level)
+
+    def statusMessage(self, message: str, level: str = "info") -> None:
+        """Placeholder for status message display."""
+        # In a real app, this would update a status bar widget
+        logger.info("[%s] %s", level.upper(), message)
 
     def _show_recommendations(self) -> None:
         """Show one reusable, independent recommendations window."""

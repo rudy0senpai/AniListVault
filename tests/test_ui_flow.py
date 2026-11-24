@@ -20,8 +20,9 @@ class TestUIFlow:
     def setup_class(cls):
         cls.app = QApplication.instance() or QApplication([])
 
-    def test_overview_can_hide_and_reopen(self, migrated_database, tmp_path):
-        from PySide6.QtCore import QSettings
+    def test_overview_removal_moves_summary_metrics_into_header(self, migrated_database, tmp_path):
+        from PySide6.QtCore import QSettings, Qt
+        from PySide6.QtWidgets import QPushButton, QScrollArea
         from animevault.ui.main_window import MainWindow
 
         QSettings.setDefaultFormat(QSettings.Format.IniFormat)
@@ -29,22 +30,25 @@ class TestUIFlow:
         settings = QSettings("AnimeVault", "AnimeVault")
         settings.clear()
         window = MainWindow()
-        assert window._overview_toggle.text() == ">>"
-        window._overview_toggle.click()
-        assert window._overview.isHidden()
-        assert window._overview_container.width() <= 42
-        assert window._overview_toggle.toolTip() == "Show Overview"
-        assert window._overview_toggle.text() == "<<"
+        window.resize(900, 650)
+        window.show()
+        self.app.processEvents()
+
+        assert not hasattr(window, "_overview")
+        assert not hasattr(window, "_overview_toggle")
+        assert set(window._nav_buttons) == {"anime", "manga", "manhwa", "manhua"}
+        assert len(window._summary_kpis) == 7
+        summary = window.findChild(QScrollArea, "headerSummaryScroll")
+        assert summary is not None
+        assert summary.widget() is not None
+        assert summary.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        nav_widgets = [*window._nav_buttons.values(), window.findChild(QPushButton, "settingsButton")]
+        assert all(button is not None for button in nav_widgets)
+        assert all(nav_widgets[i].geometry().right() < nav_widgets[i + 1].geometry().left() or nav_widgets[i].geometry().intersects(nav_widgets[i + 1].geometry()) is False for i in range(len(nav_widgets) - 1))
         window.close()
-        restored = MainWindow()
-        assert restored._overview.isHidden()
-        restored._overview_toggle.click()
-        assert not restored._overview.isHidden()
-        assert restored._overview_toggle.text() == ">>"
-        restored.close()
         settings.clear()
 
-    def test_overview_uses_scroll_viewport_and_has_no_rec_panel(self, migrated_database, tmp_path):
+    def test_header_summary_is_not_a_separate_overview_sidebar(self, migrated_database, tmp_path):
         from PySide6.QtCore import QSettings, Qt
         from PySide6.QtWidgets import QScrollArea
         from animevault.ui.main_window import MainWindow
@@ -52,15 +56,23 @@ class TestUIFlow:
         QSettings.setDefaultFormat(QSettings.Format.IniFormat)
         QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, str(tmp_path))
         window = MainWindow()
-        assert window._overview_scroll.widget() is window._overview
-        assert window._overview_scroll.verticalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAsNeeded
-        assert not any(type(window._body.itemAt(i).widget()).__name__ == "RecommendationPanel" for i in range(window._body.count()) if window._body.itemAt(i).widget())
+        assert not hasattr(window, "_overview_scroll")
+        assert window._body.count() == 1
+        assert window._body.itemAt(0).widget() is window._library_surface
+        assert window._library_surface.indexOf(window._grid) >= 0
+        assert window._library_surface.currentWidget() in (
+            window._grid, window._web_view
+        )
+        summary = window.findChild(QScrollArea, "headerSummaryScroll")
+        assert summary is not None
+        assert summary.verticalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         window.close()
+
 
     def test_main_window_glass_surfaces_preserve_primary_button_contrast(self, migrated_database, tmp_path):
         from PySide6.QtCore import QSettings
         from PySide6.QtGui import QPalette
-        from PySide6.QtWidgets import QPushButton
+        from PySide6.QtWidgets import QPushButton, QScrollArea
         from animevault.ui.main_window import MainWindow
         from animevault.ui.theme import ACCENT
         from animevault.ui.visual_effects import RadialGradientLabel
@@ -75,7 +87,9 @@ class TestUIFlow:
         assert window.findChild(RadialGradientLabel, "appTitle") is not None
         assert window._grid.objectName() == "cardGrid"
         assert "QWidget#centralWidget" in window.styleSheet()
-        assert "transparent" in window._overview_scroll.viewport().styleSheet()
+        summary = window.findChild(QScrollArea, "headerSummaryScroll")
+        assert summary is not None
+        assert "transparent" in summary.viewport().styleSheet()
         primary = window.findChild(QPushButton, "primaryButton")
         assert primary is not None and primary.isEnabled()
         assert primary.palette().color(QPalette.ColorRole.Button).name().lower() == ACCENT.lower()

@@ -12,13 +12,15 @@ from typing import Optional
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QGridLayout, QScrollArea, QWidget
 
+from animevault.ui.scroll_animation import ScrollRevealArea
+
 #: Cards never get narrower than this.
 MIN_CARD_WIDTH = 268
 GRID_H_SPACING = 14
 GRID_V_SPACING = 14
 
 
-class CardGrid(QScrollArea):
+class CardGrid(ScrollRevealArea):
     """A scrollable, self-reflowing grid of cards."""
 
     card_clicked = Signal(object)
@@ -55,6 +57,7 @@ class CardGrid(QScrollArea):
         self.clear()
         self._cards = list(cards)
         self._relayout(force=True)
+        self.refresh_reveal_targets()
 
     def clear(self) -> None:
         for card in self._cards:
@@ -64,6 +67,7 @@ class CardGrid(QScrollArea):
         self._cards = []
         self._columns = 0
         self._layout.invalidate()
+        self.refresh_reveal_targets()
 
     @property
     def cards(self) -> list:

@@ -20,7 +20,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QMessageBox,
     QPushButton,
-    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -31,6 +30,7 @@ from animevault.recommendation.feedback import FeedbackStore
 from animevault.services.title_norm import normalize_title
 from animevault.models.anime import Anime
 from animevault.models.literature import Literature
+from animevault.ui.scroll_animation import ScrollRevealArea
 
 import logging
 
@@ -252,7 +252,7 @@ class RecommendationDialog(QDialog):
         self._status_label.setStyleSheet("font-size:13px; padding:12px;")
         root.addWidget(self._status_label)
 
-        self._scroll = QScrollArea()
+        self._scroll = ScrollRevealArea()
         self._scroll.setWidgetResizable(True)
         self._content = QWidget()
         self._content_layout = QGridLayout(self._content)
@@ -322,6 +322,7 @@ class RecommendationDialog(QDialog):
             w = item.widget()
             if w is not None:
                 w.deleteLater()
+        self._scroll.refresh_reveal_targets()
 
     def _reflow_cards(self) -> None:
         if not self._card_widgets:
@@ -437,6 +438,7 @@ class RecommendationDialog(QDialog):
             card.feedback_requested.connect(self._on_feedback)
             self._card_widgets.append(card)
         self._reflow_cards()
+        self._scroll.refresh_reveal_targets()
 
     def _on_feedback(self, action: str, result: RecommendationResult) -> None:
         field = result.provider_key or ""

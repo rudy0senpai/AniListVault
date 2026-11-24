@@ -14,7 +14,6 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
-    QScrollArea,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
@@ -31,6 +30,7 @@ from animevault.ui.theme import (
     status_badge_style,
 )
 from animevault.ui.thumb_cache import ThumbnailCache
+from animevault.ui.scroll_animation import ScrollRevealArea
 
 _POSTER_W, _POSTER_H = 170, 244
 
@@ -111,7 +111,7 @@ class DetailsDialog(QDialog):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        scroll = QScrollArea()
+        scroll = ScrollRevealArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         host = QWidget()

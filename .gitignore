@@ -20,3 +20,6 @@ build/
 # Build output (large binaries)
 /dist/
 /build/
+# JavaScript dependencies and generated Vite bundle
+node_modules/
+src/animevault/ui/web/dist/
