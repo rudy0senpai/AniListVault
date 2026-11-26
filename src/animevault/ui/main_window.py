@@ -288,8 +288,7 @@ class MainWindow(QMainWindow):
         settings.setToolTip("Settings")
         settings.clicked.connect(self._show_settings_panel)
         row.addWidget(settings)
-        if self._topbar_available:
-            nav_row.hide()  # React Liquid Glass surface owns title, tabs and settings.
+        # Native toolbar owns the title, tabs and settings — always show the native row.
         root.addWidget(nav_row)
 
         summary_scroll = QScrollArea()
@@ -327,22 +326,11 @@ class MainWindow(QMainWindow):
     def _build_toolbar(self) -> QWidget:
         native_toolbar = self._build_native_toolbar()
         self._native_toolbar = native_toolbar
-        if self._navbar_web_view is None or self._shared_bridge is None:
-            return native_toolbar
-        native_toolbar.hide()
-        try:
-            self._menu_web_view = self._web_view_class(self, bridge=self._shared_bridge, surface="toolbar")
-            self._menu_web_view.setObjectName("liquidGlassMenuBar")
-            self._menu_web_view.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-            self._menu_web_view.setFixedHeight(60)
-            self._topbar_available = True
-            return self._menu_web_view
-        except Exception:
-            logger.exception("React Liquid Glass menu bar unavailable; using native toolbar")
-            native_toolbar.show()
-            self._topbar_available = False
-            self._navbar_web_view.hide()
-            return native_toolbar
+        # Reverted: always use the native toolbar (no React liquid glass topbar).
+        native_toolbar.show()
+        self._topbar_available = False
+        self._menu_web_view = None
+        return native_toolbar
 
     def _build_navbar(self) -> QWidget:
         if self._web_view_class is None or self._shared_bridge is None:

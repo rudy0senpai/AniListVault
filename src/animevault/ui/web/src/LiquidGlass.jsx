@@ -238,11 +238,11 @@ export function BubbleMenu({ label, items, variant = "glass", icon, onOpenChange
   const close = useCallback((refocus) => {
     setClosing(true);
     onOpenChange?.(false, 0);
-    setTimeout(() => {
-      setOpen(false);
-      setClosing(false);
-      if (refocus) trigger.current?.focus();
-    }, 140);
+    // Set open=false immediately so the height/state stay consistent.
+    // Closing animation plays via CSS instead of a JS timeout.
+    setOpen(false);
+    setClosing(false);
+    if (refocus) trigger.current?.focus();
   }, [onOpenChange]);
 
   // Register only from the effect so component state is the sole trigger.
@@ -306,6 +306,7 @@ export function BubbleMenu({ label, items, variant = "glass", icon, onOpenChange
     if (closing) return;
     if (!open) {
       // Opening state is authoritative; the effect registers with the shared controller.
+      onOpenChange?.(true, items.filter((item) => !item.divider).length);
       setOpen(true);
     } else {
       // Toggle this menu closed.

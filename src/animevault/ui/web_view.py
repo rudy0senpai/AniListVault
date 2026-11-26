@@ -5,14 +5,14 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from PySide6.QtCore import QObject, QUrl, QUrlQuery, QTimer, Signal, Slot
 from PySide6.QtGui import QCursor, QColor
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWebEngineCore import QWebEngineSettings
 from PySide6.QtWebEngineWidgets import QWebEngineView
-from PySide6.QtWidgets import QMenu
+from PySide6.QtWidgets import QMenu, QMessageBox
 
 logger = logging.getLogger(__name__)
 
@@ -156,6 +156,39 @@ class LibraryBridge(QObject):
     categoryChanged = Signal(str)
     retryAvailableChanged = Signal(bool)
 
+    # Canonical action registry: every valid menu action identifier.
+    CANONICAL_ACTIONS = frozenset({
+        "dashboard",
+        "recommendations",
+        "settings",
+        "settings_panel",
+        "import_xlsx",
+        "import_csv",
+        "import_sql",
+        "export_csv",
+        "export_xlsx",
+        "export_ods",
+        "export_sql",
+        "backup",
+        "fetch_missing",
+        "refresh_all",
+        "cloud_sync",
+        "about",
+        "open_readme",
+        "delete_selected",
+        "retry_failed",
+        "toggle_selection_mode",
+    })
+
+    # (action, handler_attribute) pairs resolved via getattr instead of a
+    # static dict, so missing methods are fail-closed instead of silent.
+    ATTR_RESOLVED_ACTIONS = {
+        "backup_now": "_on_backup",
+        "clear_cache": "_on_clear_cache",
+        "check_for_updates": "_on_check_for_updates",
+        "view_licenses": "_on_view_licenses",
+    }
+
     def __init__(self, owner: Any) -> None:
         super().__init__(owner)
         self._owner = owner
@@ -234,19 +267,28 @@ class LibraryBridge(QObject):
                 owner._show_library()
             return
 
-        # Lazy method resolution: only resolve the handler when the action
-        # is dispatched, so a single missing method never breaks the entire
-        # menu's action routing.
-        method_name = {
-            "backup_now": "_on_backup",
-            "clear_cache": "_on_clear_cache",
-            "check_for_updates": "_on_check_for_updates",
-            "view_licenses": "_on_view_licenses",
-        }.get(action)
+        # 1) Validate against the canonical action registry.
+        if action not in self.CANONICAL_ACTIONS:
+            logger.error(
+                "Unknown menu action: %s (canonical set: %s)", action,
+                sorted(self.CANONICAL_ACTIONS),
+            )
+            return
 
-        if not method_name:
-            # Fall back to known action mappings
-            actions = {
+        # 2) Resolve the handler.
+        handler: Callable[['MainWindow'], None] | None = None
+        method_name = self.ATTR_RESOLVED_ACTIONS.get(action)
+        if method_name is not None:
+            handler = getattr(owner, method_name, None)
+            if not callable(handler):
+                logger.error(
+                    "Action handler unavailable: %s (owner=%s)",
+                    method_name, type(owner).__name__,
+                )
+                return
+        else:
+            # Static dict fallback (kept for backwards compatibility).
+            handlers = {
                 "dashboard": owner._show_dashboard,
                 "recommendations": owner._show_recommendations,
                 "settings": lambda: QTimer.singleShot(0, owner._show_settings_panel),
@@ -267,31 +309,30 @@ class LibraryBridge(QObject):
                 "delete_selected": owner._on_delete_selected,
                 "retry_failed": owner._retry_failed_enrichment,
                 "toggle_selection_mode": owner._toggle_selection_mode,
-                "check_for_updates": owner._on_check_for_updates,
-                "view_licenses": owner._on_view_licenses,
             }
-            handler = actions.get(action)
-            if handler is None:
-                logger.warning("Unknown menu action: %s", action)
-                return
-        else:
-            handler = getattr(owner, method_name, None)
-            if not callable(handler):
-                logger.error(
-                    "Action handler unavailable: %s (owner=%s)",
-                    method_name,
-                    type(owner).__name__,
-                )
-                return
+            handler = handlers.get(action)
 
-        # Diagnostic logging
-        logger.info(
-            "menuAction: action=%s handler=%s owner=%s",
-            action,
-            getattr(handler, "__name__", str(handler)),
-            type(owner).__name__,
-        )
-        handler()
+        if handler is None:
+            logger.error("No handler resolved for action: %s", action)
+            return
+
+        # 3) Execute with diagnostic logging (no bare tracebacks to UI).
+        try:
+            logger.info("menuAction: action=%s handler=%s owner=%s",
+                        action, getattr(handler, '__name__', str(handler)),
+                        type(owner).__name__)
+            handler()
+        except Exception as exc:
+            # Fail-safe: log detail server-side, show a user-friendly message.
+            logger.exception("Failed to execute menuAction %s", action)
+            try:
+                QMessageBox.critical(
+                    owner, "Action failed",
+                    f"Could not complete the action. Please try again.\n\n"
+                    f"Details: {exc.__class__.__name__}",
+                )
+            except Exception:
+                pass
 
     @Slot(result=str)
     def getLibrary(self) -> str:

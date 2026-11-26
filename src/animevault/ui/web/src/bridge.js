@@ -7,17 +7,22 @@ export function useLibrary() {
 
   useEffect(() => {
     let disposed = false;
-    if (!window.qt?.webChannelTransport) {
-      setItems([]);
-      setReady(true);
-      return () => { disposed = true; };
-    }
 
+    // Load the Qt WebChannel loader script. The QWebChannel class and
+    // window.qt.webChannelTransport are set asynchronously by Qt WebEngine
+    // after this script executes, so we do NOT short-circuit here. We always
+    // attempt to load the script and wire up the channel in onload.
     const script = document.createElement("script");
     script.src = "qrc:///qtwebchannel/qwebchannel.js";
     script.onload = () => {
-      if (!window.QWebChannel || disposed) return;
-      new window.QWebChannel(window.qt.webChannelTransport, (channel) => {
+      if (disposed) return;
+      if (!window.QWebChannel) {
+        setItems([]);
+        setReady(true);
+        return;
+      }
+      const transport = window.qt?.webChannelTransport;
+      new window.QWebChannel(transport, (channel) => {
         if (disposed) return;
         const api = channel.objects.bridge;
         setBridge(api);
