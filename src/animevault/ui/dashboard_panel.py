@@ -245,7 +245,6 @@ class _VerticalTierChart(QWidget):
         self._total = 0
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.setMinimumHeight(280)
-        self.setMaximumHeight(360)
         self.setMinimumWidth(0)
 
     def set_data(self, data: dict[str, int]) -> None:
@@ -316,7 +315,6 @@ class _DonutChart(QFrame):
         self._total = 0
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.setMinimumHeight(180)
-        self.setMaximumHeight(300)
         self.setMinimumWidth(0)
 
     def set_data(self, data: dict[str, int]) -> None:
@@ -693,6 +691,11 @@ class DashboardPanel(QFrame):
         self._effects_slider.setObjectName("effectsSlider")
         self._effects_slider.setMinimum(0)
         self._effects_slider.setMaximum(100)
+        self._effects_slider.setSingleStep(5)
+        self._effects_slider.setPageStep(10)
+        self._effects_slider.setMinimumHeight(36)
+        self._effects_slider.setAccessibleName("Reduce visual effects")
+        self._effects_slider.setAccessibleDescription("At 0, visual effects are unchanged; any value above 0 enables reduced effects.")
         self._effects_slider.setValue(0)
         self._effects_slider.setToolTip("Reduce visual effects (glass / neumorphism depth)")
         self._effects_slider.valueChanged.connect(self._on_effects_slider_changed)
@@ -707,6 +710,11 @@ class DashboardPanel(QFrame):
         self._height_slider.setObjectName("heightSlider")
         self._height_slider.setMinimum(0)
         self._height_slider.setMaximum(200)
+        self._height_slider.setSingleStep(5)
+        self._height_slider.setPageStep(10)
+        self._height_slider.setMinimumHeight(36)
+        self._height_slider.setAccessibleName("Chart height")
+        self._height_slider.setAccessibleDescription("Adjust visualization heights from 50 percent to 150 percent.")
         self._height_slider.setValue(100)
         self._height_slider.setToolTip("Chart panel height")
         self._height_slider.valueChanged.connect(self._on_height_slider_changed)
@@ -967,23 +975,24 @@ class DashboardPanel(QFrame):
             self._tier_chart.update()
 
     def _on_effects_slider_changed(self, value: int) -> None:
-        self._on_effects_changed(bool(value))
-        set_reduce_effects(bool(value))
+        self._effects_slider_label.setText(f"Reduce Effects {value}%")
+        enabled = value > 0
+        set_reduce_effects(enabled)
+        self._on_effects_changed(enabled)
 
     def _on_height_slider_changed(self, value: int) -> None:
+        self._height_slider_label.setText(f"Chart Height {value}%")
         self._height_scale = (value + 100) / 200.0
         self._apply_height_scale()
 
     def _apply_height_scale(self) -> None:
         factor = self._height_scale
         if hasattr(self, "_donut"):
-            self._donut.setMinimumHeight(max(50, int(180 * factor)))
-            self._donut.setMaximumHeight(int(300 * factor))
+            self._donut.setMinimumHeight(max(90, int(180 * factor)))
         if hasattr(self, "_tier_chart"):
-            self._tier_chart.setMinimumHeight(int(280 * factor))
-            self._tier_chart.setMaximumHeight(int(360 * factor))
+            self._tier_chart.setMinimumHeight(max(140, int(280 * factor)))
         if hasattr(self, "_cat_dist_bar"):
-            self._cat_dist_bar.setMinimumHeight(int(48 * factor))
+            self._cat_dist_bar.setMinimumHeight(max(24, int(48 * factor)))
 
     def _switch_view(self, view: str) -> None:
         """Switch between the five dashboard views."""

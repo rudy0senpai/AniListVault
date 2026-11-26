@@ -85,7 +85,7 @@ export default function TopBar({ bridge, surface = "all" }) {
       : ({ label: item.label }));
   const selectCategory = (value) => invoke(`category:${value}`);
   const toggleSelection = () => bridge?.setSelectionMode(!selectionMode);
-  const onMenuToggle = (open, itemCount) => bridge?.setMenuOpen(open, itemCount);
+  const onMenuToggle = useCallback((open, itemCount) => bridge?.setMenuOpen(open, itemCount), [bridge]);
 
   return <div className={`av-liquid-topbar av-liquid-topbar--${surface}`}>
     {surface !== "toolbar" && <div className="av-liquid-brand-row">

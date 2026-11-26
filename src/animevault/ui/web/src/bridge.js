@@ -21,20 +21,27 @@ export function useLibrary() {
         if (disposed) return;
         const api = channel.objects.bridge;
         setBridge(api);
-        api.getLibrary((raw) => {
-          if (disposed) return;
-          try { setItems(JSON.parse(raw)); } catch { setItems([]); }
+        if (typeof api.getLibrary === "function") {
+          api.getLibrary((raw) => {
+            if (disposed) return;
+            try { setItems(JSON.parse(raw)); } catch { setItems([]); }
+            setReady(true);
+          });
+        } else {
+          setItems([]);
           setReady(true);
-        });
-        api.libraryChanged.connect((raw) => {
-          if (disposed) return;
-          let event;
-          try { event = JSON.parse(raw); } catch { return; }
-          if (event.type === "reset") setItems(event.items || []);
-          if (event.type === "upsert" && event.item) {
-            setItems((current) => current.map((item) => item.id === event.item.id ? event.item : item));
-          }
-        });
+        }
+        if (api.libraryChanged?.connect) {
+          api.libraryChanged.connect((raw) => {
+            if (disposed) return;
+            let event;
+            try { event = JSON.parse(raw); } catch { return; }
+            if (event.type === "reset") setItems(event.items || []);
+            if (event.type === "upsert" && event.item) {
+              setItems((current) => current.map((item) => item.id === event.item.id ? event.item : item));
+            }
+          });
+        }
       });
     };
     script.onerror = () => { if (!disposed) setReady(true); };

@@ -45,7 +45,7 @@ function useSpecular(tilt = false) {
   };
 }
 
-function Card({ item, bridge, onOpen, selectionMode, selected, onSelected }) {
+function Card({ item, bridge, onOpen, selectionMode, selected, onSelected, showProgress }) {
   const pointer = useSpecular(true);
   const total = Number.isFinite(Number(item.total)) && Number(item.total) > 0 ? Number(item.total) : null;
   const progress = Math.max(0, Number(item.progress) || 0);
@@ -65,11 +65,11 @@ function Card({ item, bridge, onOpen, selectionMode, selected, onSelected }) {
           {bridge && <button type="button" className="av-menu" aria-label="More options" onClick={(e) => { e.stopPropagation(); bridge.showMenu(item.id); }}>⋮</button>}
         </div>
         <div className="av-meta">{summary}</div>
-        <div className="av-progress"><span>{progress} / {total ?? "?"}</span>
+        {showProgress && <div className="av-progress"><span>{progress} / {total ?? "?"}</span>
           <span className={`av-bar${total ? "" : " indeterminate"}`} role="progressbar" aria-valuemin={0} aria-valuemax={total || undefined} aria-valuenow={total ? Math.min(progress, total) : undefined} aria-label="Progress">
             <i style={{ width: total ? `${percent}%` : `${progress ? 34 : 0}%` }} />
           </span>
-        </div>
+        </div>}
         <Pills item={item} />
       </div>
     </div>
@@ -104,6 +104,7 @@ function Detail({ item, onClose }) {
 
 export default function App() {
   const { items, bridge, ready } = useBridgeLibrary();
+  const [preferences, setPreferences] = useState(() => ({ view: "Grid", progress: true, confirmDelete: true, autoComplete: false, ...(window.AV_settings?.library || {}) }));
   const [page, setPage] = useState("library");
   const [open, setOpen] = useState(null);
   const [selectionMode, setSelectionMode] = useState(false);
@@ -119,6 +120,14 @@ export default function App() {
       window.removeEventListener("animevault:library", showLibrary);
     };
   }, []);
+  useEffect(() => {
+    const apply = (event) => {
+      const next = event.detail || {};
+      if (next.library) setPreferences((current) => ({ ...current, ...next.library }));
+    };
+    window.addEventListener("animevault:settings-applied", apply);
+    return () => window.removeEventListener("animevault:settings-applied", apply);
+  }, []);
   const select = useCallback((id, value) => {
     setSelected((before) => { const next = new Set(before); value ? next.add(id) : next.delete(id); return next; });
     bridge?.setSelected(id, value);
@@ -133,8 +142,8 @@ export default function App() {
   return <main className="av-app">
     <div className="av-toolbar"><div><div className="eyebrow">YOUR COLLECTION</div><h1>Library</h1><p>{items.length} titles · ordered and filtered by AnimeVault</p></div>
       <div>{bridge && <><button className="select-button" onClick={() => setPage("dashboard")}>Dashboard</button> <button className={`select-button${selectionMode ? " active" : ""}`} onClick={toggleSelectionMode}>{selectionMode ? "✓ Selecting" : "Select"}</button></>}</div></div>
-    {!ready ? <div className="empty-state">Loading library…</div> : items.length ? <div className="av-grid">
-      {items.map((item) => <Card key={item.id} item={item} bridge={bridge} onOpen={setOpen} selectionMode={selectionMode} selected={selected.has(item.id)} onSelected={select} />)}
+    {!ready ? <div className="empty-state">Loading library…</div> : items.length ? <div className={`av-grid av-grid--${String(preferences.view || "Grid").toLowerCase()}`}>
+      {items.map((item) => <Card key={item.id} item={item} bridge={bridge} onOpen={setOpen} selectionMode={selectionMode} selected={selected.has(item.id)} onSelected={select} showProgress={preferences.progress !== false} />)}
     </div> : <div className="empty-state">No titles match the current library filters.</div>}
     {open && <Detail item={open} onClose={onClose} />}
   </main>;

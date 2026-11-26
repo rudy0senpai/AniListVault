@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QObject, QUrl, QUrlQuery, Signal, Slot
+from PySide6.QtCore import QObject, QUrl, QUrlQuery, QTimer, Signal, Slot
 from PySide6.QtGui import QCursor, QColor
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWebEngineCore import QWebEngineSettings
@@ -249,8 +249,8 @@ class LibraryBridge(QObject):
             actions = {
                 "dashboard": owner._show_dashboard,
                 "recommendations": owner._show_recommendations,
-                "settings": owner._show_settings_panel,
-                "settings_panel": owner._show_settings_panel,
+                "settings": lambda: QTimer.singleShot(0, owner._show_settings_panel),
+                "settings_panel": lambda: QTimer.singleShot(0, owner._show_settings_panel),
                 "import_xlsx": owner._on_import_xlsx,
                 "import_csv": owner._on_import_csv,
                 "import_sql": owner._on_import_sql,
@@ -400,10 +400,22 @@ class AnimeWebView(QWebEngineView):
         "selectionModeChanged", "categoryChanged", "retryAvailableChanged",
     ]
 
-    def __init__(self, owner: Any, bridge: LibraryBridge | None = None, surface: str = "library") -> None:
+    # Required settings bridge contract
+    _SETTINGS_BRIDGE_SLOTS = [
+        "getSettings", "setSettings", "settingsAction", "getVersion",
+        "apply_settings", "closeSettings",
+    ]
+    _SETTINGS_BRIDGE_SIGNALS = ["settingsChanged", "settingsApplied", "actionTriggered", "closeRequested"]
+
+    def __init__(self, owner: Any, bridge: QObject | None = None, surface: str = "library") -> None:
         super().__init__(owner)
-        self.bridge = bridge or LibraryBridge(owner)
-        self._validate_bridge_contract(self.bridge, self._LIBRARY_BRIDGE_SLOTS, self._LIBRARY_BRIDGE_SIGNALS)
+        if bridge is None:
+            bridge = LibraryBridge(owner)
+        self.bridge = bridge
+        if surface == "settings":
+            self._validate_bridge_contract(self.bridge, self._SETTINGS_BRIDGE_SLOTS, self._SETTINGS_BRIDGE_SIGNALS)
+        else:
+            self._validate_bridge_contract(self.bridge, self._LIBRARY_BRIDGE_SLOTS, self._LIBRARY_BRIDGE_SIGNALS)
         self.channel = QWebChannel(self.page())
         self.channel.registerObject("bridge", self.bridge)
         self.page().setWebChannel(self.channel)

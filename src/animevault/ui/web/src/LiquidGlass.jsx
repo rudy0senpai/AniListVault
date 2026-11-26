@@ -199,43 +199,33 @@ const Chevron = () => (
    Single-open controller: only one BubbleMenu is open at a time.
    Notifies the native overlay (via onOpenChange callback) when a
    menu opens or closes. Stale-timer protection via closing flag. */
-let managedId = null;
-let managedCallback = null;
+let managedMenu = null;
 let disposing = false;
 
-export function registerMenu(id, onOpen) {
-  managedId = id;
-  managedCallback = onOpen;
-  onOpen(true, 0);
+export function registerMenu(id, closeMenu, onOpen, itemCount) {
+  if (disposing) return;
+  if (managedMenu && managedMenu.id !== id) {
+    managedMenu.closeMenu(false);
+  }
+  managedMenu = { id, closeMenu, onOpen, itemCount };
+  onOpen?.(true, itemCount);
 }
 
 export function unregisterMenu(id) {
-  if (managedId === id) {
-    managedId = null;
-    managedCallback = null;
+  if (managedMenu?.id === id) {
+    managedMenu.onOpen?.(false, 0);
+    managedMenu = null;
   }
 }
 
-export function reportMenuChange(id, open, onOpen) {
-  if (disposing) return;
-  if (managedId === id) {
-    managedCallback?.(open, 0);
-  }
-}
-
-export function closeAllMenus(onOpen) {
-  if (managedCallback) {
-    managedCallback(false, managedId);
-    managedId = null;
-    managedCallback = null;
-  }
-  onOpen(false, 0);
+export function closeAllMenus() {
+  managedMenu?.closeMenu(false);
+  managedMenu = null;
 }
 
 export function disposeMenus() {
   disposing = true;
-  managedId = null;
-  managedCallback = null;
+  managedMenu = null;
 }
 export function BubbleMenu({ label, items, variant = "glass", icon, onOpenChange }) {
   const [open, setOpen] = useState(false);
@@ -247,24 +237,23 @@ export function BubbleMenu({ label, items, variant = "glass", icon, onOpenChange
 
   const close = useCallback((refocus) => {
     setClosing(true);
+    onOpenChange?.(false, 0);
     setTimeout(() => {
       setOpen(false);
       setClosing(false);
       if (refocus) trigger.current?.focus();
     }, 140);
-  }, []);
+  }, [onOpenChange]);
 
-  // Shared controller: register menu with global single-open controller
+  // Register only from the effect so component state is the sole trigger.
+  // The global controller keeps the active menu's close callback and closes
+  // it before another menu registers.
+  const itemCount = items.filter((item) => !item.divider).length;
   useEffect(() => {
-    if (open) {
-      registerMenu(id, onOpenChange);
-    } else {
-      unregisterMenu(id);
-    }
-    return () => {
-      unregisterMenu(id);
-    };
-  }, [id, onOpenChange]);
+    if (open) registerMenu(id, close, onOpenChange, itemCount);
+    else unregisterMenu(id);
+    return () => unregisterMenu(id);
+  }, [id, open, close, onOpenChange, itemCount]);
 
   // Outside-click dismissal
   useEffect(() => {
@@ -316,8 +305,7 @@ export function BubbleMenu({ label, items, variant = "glass", icon, onOpenChange
   const onTriggerClick = (e) => {
     if (closing) return;
     if (!open) {
-      // Open this menu; the shared controller closes all others.
-      registerMenu(id, onOpenChange);
+      // Opening state is authoritative; the effect registers with the shared controller.
       setOpen(true);
     } else {
       // Toggle this menu closed.

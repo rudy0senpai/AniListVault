@@ -148,57 +148,31 @@ const DEFAULTS = {
   glass: 70, animations: true, reduce: false, values: defaultValues,
 };
 
-// Async settings loading with proper loading state and error handling.
-// Qt WebChannel getSettings is a @Slot(result=str) that returns a JSON string
-// synchronously across the web channel, so we wrap it in a Promise.
 async function loadAsync(bridge) {
-  const loading = { loaded: false, error: null, settings: null };
-
   if (!bridge || typeof bridge.getSettings !== "function") {
-    loading.settings = DEFAULTS;
-    loading.loaded = true;
-    return loading;
+    return { loaded: true, error: "Settings bridge is unavailable", settings: DEFAULTS };
   }
-
-  // Bridge.getSettings returns a JSON string synchronously via the WebChannel.
   return new Promise((resolve) => {
-    try {
-      if (typeof bridge.getSettings === "function") {
-        const raw = bridge.getSettings();
-        if (raw) {
-          try {
-            const parsed = JSON.parse(raw);
-            if (parsed) {
-              loading.settings = {
-                ...DEFAULTS,
-                ...parsed,
-                colors: { ...DEFAULTS.colors, ...parsed.colors },
-                values: { ...defaultValues, ...parsed.values },
-              };
-              loading.loaded = true;
-            } else {
-              loading.error = "Parsed settings were empty";
-              loading.settings = DEFAULTS;
-            }
-          } catch (parseError) {
-            loading.error = `Failed to parse settings JSON: ${parseError.message}`;
-            loading.settings = DEFAULTS;
-          }
-        } else {
-          loading.error = "Bridge returned no data";
-          loading.settings = DEFAULTS;
-        }
+    bridge.getSettings((raw) => {
+      try {
+        const parsed = JSON.parse(raw || "{}");
+        resolve({
+          loaded: true,
+          error: null,
+          settings: {
+            ...DEFAULTS,
+            ...parsed,
+            colors: { ...DEFAULTS.colors, ...(parsed.colors || {}) },
+            values: { ...defaultValues, ...(parsed.values || {}) },
+          },
+        });
+      } catch (error) {
+        resolve({ loaded: true, error: error.message, settings: DEFAULTS });
       }
-    } catch (e) {
-      loading.error = `Bridge.getSettings threw: ${e.message}`;
-      loading.settings = DEFAULTS;
-    }
-    loading.loaded = true;
-    resolve(loading);
+    });
   });
 }
 
-// Wrapper that returns the loading state
 function load(bridge) {
   return loadAsync(bridge);
 }
@@ -659,16 +633,7 @@ function GenericSection({ id, label, values, setValue, version, onAction }) {
   );
 }
 
-/* ================================== settings persistence ================================== */
-const bridgeKey = (id) => `animevault.settings.${id}`;
-
-function saveToBridge(bridge, settings) {
-  if (bridge && typeof bridge.setSettings === "function") {
-    try { bridge.setSettings(JSON.stringify(settings)); } catch (e) { /* ignore */ }
-  }
-}
-
-/** CSS custom properties to theme the rest of the app from applied settings. */
+/* CSS custom properties to theme the rest of the app from applied settings. */
 export function themeToCssVars(s) {
   const c = s.colors || {};
   return {
@@ -687,12 +652,13 @@ export default function Settings({ bridge, onApply, onClose, onAction, version =
   // Async load: settings may come from the bridge (QWebChannel),
   // which is asynchronous. Use a promise to await the result.
   const [loading, setLoading] = useState(true);
-  const [applied, setApplied] = useState(() => load(bridge));
-  const [d, setD] = useState(applied);
+  const [applied, setApplied] = useState(DEFAULTS);
+  const [d, setD] = useState(DEFAULTS);
   const [section, setSection] = useState("appearance");
   const [role, setRole] = useState("accent");
   const [query, setQuery] = useState("");
   const [toast, setToast] = useState(false);
+  const [applyError, setApplyError] = useState("");
   const scroller = useRef(null), studio = useRef(null);
 
   // Await async settings load
@@ -735,32 +701,27 @@ export default function Settings({ bridge, onApply, onClose, onAction, version =
   const generate = () => setD((p) => ({ ...p, themeId: "custom", colors: makeThemeFromAccent(p.colors.accent) }));
 
   const apply = async () => {
-    setApplied(d);
-    // Persist and apply via the bridge; the backend confirms success before
-    // we update the UI (per the settings lifecycle requirements).
-    if (bridge && typeof bridge.apply_settings === "function") {
-      try {
-        const raw = bridge.apply_settings(JSON.stringify(d));
-        if (raw) {
-          try {
-            const result = JSON.parse(raw);
-            if (result.status === "error") {
-              setToast(false);
-              // Show the backend error to the user
-              setToast(true);
-              return;
-            }
-          } catch (e) {
-            // Not JSON; treat as success
-          }
-        }
-      } catch (e) {
-        logger.error("apply_settings threw: " + e.message);
-      }
+    setApplyError("");
+    if (!bridge || typeof bridge.apply_settings !== "function") {
+      setApplyError("Settings bridge is unavailable; changes were not saved.");
+      return;
     }
-    saveToBridge(bridge, d);
-    onApply?.(d);
-    setToast(true);
+    try {
+      const raw = await new Promise((resolve) => {
+        bridge.apply_settings(JSON.stringify(d), resolve);
+      });
+      const result = JSON.parse(raw || "{}");
+      if (result.status !== "success") {
+        setApplyError(result.message || "Settings could not be saved.");
+        return;
+      }
+      setApplied(d);
+      onApply?.(d);
+      setToast(true);
+    } catch (error) {
+      logger.error("Settings apply failed: " + error.message);
+      setApplyError(error.message || "Settings could not be saved.");
+    }
   };
   const restore = () => setD((p) => ({ ...DEFAULTS, customThemes: p.customThemes }));
   const handleAction = (action) => {
@@ -872,7 +833,7 @@ export default function Settings({ bridge, onApply, onClose, onAction, version =
           <footer className="sv-foot">
             <BubbleButton onClick={restore}>Restore Defaults</BubbleButton>
             <div className="sv-foot-r">
-              {toast ? <span className="sv-toast" role="status">Settings applied</span> : dirty && <span className="sv-dirty">Unsaved changes</span>}
+              {applyError ? <span className="sv-dirty" role="alert">{applyError}</span> : toast ? <span className="sv-toast" role="status">Settings applied</span> : dirty && <span className="sv-dirty">Unsaved changes</span>}
               <BubbleButton variant="accent" onClick={apply} disabled={!dirty} style={{ opacity: dirty ? 1 : 0.5 }}>Apply</BubbleButton>
             </div>
           </footer>

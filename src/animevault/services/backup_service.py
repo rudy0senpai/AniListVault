@@ -47,7 +47,7 @@ def backup_database() -> Optional[Path]:
         # Use SQLite's native backup API for a safe, atomic copy
         with sqlite3.connect(str(db_path)) as src:
             with sqlite3.connect(str(backup_path)) as dst:
-                dst.backup(src)
+                src.backup(dst)
 
         logger.info("Database backup created: %s", backup_path)
         return backup_path

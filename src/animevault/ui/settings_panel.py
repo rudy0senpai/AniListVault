@@ -15,7 +15,7 @@ from typing import Any, Optional
 from PySide6.QtCore import QObject, Signal, Slot, Qt
 from PySide6.QtWebChannel import QWebChannel
 
-from animevault.services.backup_service import backup_database
+from animevault.services.backup_service import backup_database, purge_old_backups
 from animevault.services.cache_service import CacheService, get_cache_dir
 from animevault.services.notification_service import NotificationService
 from animevault.services.update_service import UpdateService, check_for_updates, view_licenses
@@ -39,6 +39,7 @@ class SettingsBridge(QObject):
 
     #: Emitted when an action button is triggered
     actionTriggered = Signal(str)
+    closeRequested = Signal()
 
     def __init__(self, owner: Any) -> None:
         super().__init__(owner)
@@ -47,6 +48,12 @@ class SettingsBridge(QObject):
         self._notification_service = NotificationService()
         self._cache_service = CacheService()
         self._update_service = UpdateService()
+
+    def validate_contract(self, required_slots: list[str], required_signals: list[str]) -> list[str]:
+        """Return missing callable slots or signal attributes for WebChannel."""
+        missing = [name for name in required_slots if not callable(getattr(self, name, None))]
+        missing.extend(name for name in required_signals if not hasattr(self, name))
+        return missing
 
     @Slot(result=str)
     def getSettings(self) -> str:
@@ -82,6 +89,11 @@ class SettingsBridge(QObject):
         elif action_id == "about.licenses":
             self._on_view_licenses()
 
+    @Slot()
+    def closeSettings(self) -> None:
+        """Request that the native settings dialog close."""
+        self.closeRequested.emit()
+
     @Slot(result=str)
     def getVersion(self) -> str:
         """Return the application version."""
@@ -102,6 +114,8 @@ class SettingsBridge(QObject):
         """Handle immediate database backup."""
         path = backup_database()
         if path is not None:
+            keep = self._settings_service.load().data.get("keep", 7)
+            purge_old_backups(max(1, int(keep)))
             self.settingsApplied.emit(json.dumps({"backup_path": str(path)}))
             self.actionTriggered.emit(f"backup_success:{path.name}")
         else:
@@ -177,15 +191,21 @@ class SettingsBridge(QObject):
             auto_complete=lib.get("autoComplete", False),
         )
 
-        # Notifications
+        owner_applies_remaining = callable(getattr(self._owner, "apply_additional_settings", None))
+        if owner_applies_remaining:
+            self._owner.apply_additional_settings(settings)
+
+        # Notifications/cache fallback for bridge owners without app services.
         notif = settings.notifications
-        self._notification_service.set_enabled(notif.get("episodes", True))
-        self._notification_service.set_episodes(notif.get("reminders", False))
-        self._notification_service.set_badge_count(notif.get("badge", True))
+        if not owner_applies_remaining:
+            self._notification_service.set_enabled(True)
+            self._notification_service.set_episodes(notif.get("episodes", True))
+            self._notification_service.set_reminders(notif.get("reminders", False))
+            self._notification_service.set_badge_count(1 if notif.get("badge", True) else 0)
 
         # Performance
         perf = settings.performance
-        if hasattr(self._cache_service, "set_max_size"):
+        if not owner_applies_remaining and hasattr(self._cache_service, "set_max_size"):
             self._cache_service.set_max_size(perf.get("cache", 500))
 
     def _apply_visibility(self, visible: bool) -> None:

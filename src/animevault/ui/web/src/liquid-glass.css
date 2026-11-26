@@ -1,9 +1,14 @@
 :root {
-  --lg-text: rgba(255, 255, 255, 0.96);
-  --lg-text-dim: rgba(225, 233, 250, 0.74);
+  --av-accent: #7fe3cf;
+  --av-secondary: #c7b6ff;
+  --av-bg: #0d1120;
+  --av-surface: #141b2e;
+  --av-text: rgba(255, 255, 255, 0.96);
+  --lg-text: var(--av-text);
+  --lg-text-dim: color-mix(in srgb, var(--av-text) 74%, transparent);
   --lg-fill: rgba(255, 255, 255, 0.045);
   --lg-fill-strong: rgba(255, 255, 255, 0.14);
-  --lg-teal: #7fe3cf;
+  --lg-teal: var(--av-accent);
   /* transparency knob: lower blur = clearer glass */
   --lg-blur: blur(12px) saturate(175%) brightness(1.06);
   --lg-font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", system-ui, sans-serif;

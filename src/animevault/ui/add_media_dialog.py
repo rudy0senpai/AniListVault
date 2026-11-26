@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QSettings
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -41,7 +41,8 @@ from animevault.media_types import (
 from animevault.models.anime import VALID_STATUSES
 from animevault.models.literature import Literature
 from animevault.tiers import TIERS
-from animevault.ui.theme import ACCENT, TEXT_MUTED, TEXT_SECONDARY
+from animevault.ui.theme import ACCENT, BG_SURFACE, TEXT_MUTED, TEXT_PRIMARY, TEXT_SECONDARY
+from animevault.ui.settings_service import should_auto_complete
 
 logger = logging.getLogger(__name__)
 
@@ -331,6 +332,19 @@ class AddMediaDialog(QDialog):
         item.save()
         return item
 
+    def _auto_complete_when_finished(self, item) -> None:
+        """Honor the Library preference when saving a fully-progressed item."""
+        enabled = QSettings("AnimeVault", "AnimeVault").value(
+            "library/auto_complete", False, type=bool
+        )
+        progress = getattr(item, "episodes_watched", None)
+        total = getattr(item, "episodes", None)
+        if progress is None:
+            progress = getattr(item, "chapters_read", 0)
+            total = getattr(item, "chapters", None)
+        if should_auto_complete(progress or 0, total, enabled):
+            item.status = "completed"
+
     def _on_save(self) -> None:
         """Save from the manual tab (or the selected search result)."""
         if self._results.currentRow() >= 0 and self._tabs.currentIndex() == 0:
@@ -365,6 +379,7 @@ class AddMediaDialog(QDialog):
                     volumes=self._volumes_spin.value(),
                 )
             item.status = status
+            self._auto_complete_when_finished(item)
             item.tier = tier
             item.notes = notes
             item.favorite = favorite
@@ -379,6 +394,7 @@ class AddMediaDialog(QDialog):
             item.episodes = self._episodes_spin.value()
             item.episodes_watched = self._episodes_watched_spin.value()
             item.status = status
+            self._auto_complete_when_finished(item)
             item.tier = tier
             item.notes = notes
             item.favorite = favorite

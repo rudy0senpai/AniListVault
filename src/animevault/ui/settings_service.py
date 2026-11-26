@@ -119,10 +119,21 @@ def default_values() -> dict[str, Any]:
             "update": False,
             "licenses": False,
         },
+
+        # Frontend preferences not yet mapped to native behavior are preserved.
+        "values": {},
     }
 
 
 # ── Settings dataclass ───────────────────────────────────────────
+
+def should_auto_complete(progress: int, total: int | None, enabled: bool) -> bool:
+    """Return whether reaching the known total should mark an item complete."""
+    if not enabled or total is None or isinstance(total, bool) or total <= 0:
+        return False
+    if isinstance(progress, bool):
+        return False
+    return int(progress) >= int(total)
 
 @dataclass
 class Settings:
@@ -162,6 +173,9 @@ class Settings:
     # About
     about: dict[str, Any] = field(default_factory=lambda: default_values()["about"])
 
+    # Additional UI values are retained for forward-compatible persistence.
+    values: dict[str, Any] = field(default_factory=dict)
+
     def validate(self) -> None:
         """Validate all settings. Raises ValueError on invalid values."""
         # Glass intensity 0-100
@@ -181,12 +195,21 @@ class Settings:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Settings":
-        """Build a Settings instance from a raw dict, filling defaults."""
-        # Fill nested dicts from defaults
-        for section in ("library", "notifications", "data", "metadata",
-                        "recommendations", "performance", "language", "about"):
-            default_section = default_values().get(section, {})
-            data.setdefault(section, default_section)
+        """Build settings from bridge values and nested persisted sections."""
+        data = dict(data)
+        defaults = default_values()
+        sections = ("library", "notifications", "data", "metadata",
+                    "recommendations", "performance", "language", "about")
+        for section in sections:
+            data[section] = {**defaults[section], **(data.get(section) or {})}
+        for key, value in (data.get("values") or {}).items():
+            section, dot, name = key.partition(".")
+            if dot and section in sections and name in defaults[section]:
+                data[section][name] = value
+        data["values"] = data.get("values") or {}
+        for key in ("themeId", "glass", "animations", "reduce", "customThemes"):
+            data.setdefault(key, defaults[key])
+        data["colors"] = {**defaults["colors"], **(data.get("colors") or {})}
         return cls(**data)
 
     def to_dict(self) -> dict[str, Any]:
@@ -202,6 +225,7 @@ class Settings:
         for section in ("library", "notifications", "data", "metadata",
                         "recommendations", "performance", "language", "about"):
             result[section] = getattr(self, section)
+        result["values"] = self.values
         return result
 
 

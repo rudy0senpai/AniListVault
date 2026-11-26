@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import logging
 import os
+import json
 from collections import Counter
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import QSize, Qt, Signal, QSettings
+from PySide6.QtCore import QSize, Qt, Signal, QSettings, QTimer
 from PySide6.QtGui import QAction, QKeySequence, QShortcut, QColor
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import (
@@ -55,7 +57,7 @@ from animevault.ui.visual_effects import HoverLiftButton, RadialGradientLabel
 from animevault.ui.scroll_animation import ScrollRevealArea
 
 # Services
-from animevault.services.backup_service import backup_database
+from animevault.services.backup_service import backup_database, purge_old_backups
 from animevault.services.cache_service import CacheService
 from animevault.services.notification_service import NotificationService
 from animevault.services.update_service import UpdateService, view_licenses
@@ -100,6 +102,23 @@ class MainWindow(QMainWindow):
         self._sort_mode = "title"
         self._select_mode = False
         self._settings = QSettings("AnimeVault", "AnimeVault")
+        self._cache_service = CacheService()
+        self._notification_service = NotificationService()
+        self._backup_timer = QTimer(self)
+        self._backup_timer.setInterval(60 * 60 * 1000)
+        self._backup_timer.timeout.connect(self._maybe_create_scheduled_backup)
+        try:
+            self._saved_settings = SettingsService().load()
+        except Exception:
+            logger.exception("Could not load saved settings; using defaults")
+            self._saved_settings = Settings()
+        self._appearance_preferences = {
+            "colors": self._saved_settings.colors,
+            "glass": self._saved_settings.glass,
+            "animations": self._saved_settings.animations,
+            "reduce": self._saved_settings.reduce,
+        }
+        self._library_preferences = dict(self._saved_settings.library)
         self._glass_cards_enabled = self._settings.value("ui/glass_cards", True, type=bool)
         if os.environ.get("ANIMEVAULT_GLASS_CARDS", "").strip() in {"0", "false", "off"}:
             self._glass_cards_enabled = False
@@ -113,6 +132,25 @@ class MainWindow(QMainWindow):
 
         self._build_ui()
         self._build_shortcuts()
+        self.set_appearance(
+            theme_id=self._saved_settings.themeId,
+            accent=self._saved_settings.colors.get("accent", "#a3eee2"),
+            secondary=self._saved_settings.colors.get("secondary", "#c7b6ff"),
+            bg=self._saved_settings.colors.get("bg", "#0a0c10"),
+            surface=self._saved_settings.colors.get("surface", "#121722"),
+            text=self._saved_settings.colors.get("text", "#f4f6fb"),
+            glass=self._saved_settings.glass,
+            animations=self._saved_settings.animations,
+            reduce=self._saved_settings.reduce,
+        )
+        self.set_library_defaults(
+            view=self._saved_settings.library.get("view", "Grid"),
+            show_progress=self._saved_settings.library.get("progress", True),
+            confirm_delete=self._saved_settings.library.get("confirmDelete", True),
+            auto_complete=self._saved_settings.library.get("autoComplete", False),
+        )
+        self.apply_additional_settings(self._saved_settings)
+        self._backup_timer.start()
         from animevault.ui.theme import liquid_glass, reduce_effects
         self._background.set_effects_reduced(reduce_effects())
         self._set_liquid_glass(liquid_glass())
@@ -178,6 +216,7 @@ class MainWindow(QMainWindow):
                     from animevault.ui.web_view import LibraryBridge
                     self._shared_bridge = LibraryBridge(self)
                 self._web_view = AnimeWebView(self, bridge=self._shared_bridge, surface="library")
+                self._web_view.loadFinished.connect(self._apply_settings_to_library_web)
                 self._library_surface.addWidget(self._web_view)
                 self._library_surface.setCurrentWidget(self._web_view)
             except Exception:
@@ -736,16 +775,19 @@ class MainWindow(QMainWindow):
 
     def _on_delete_one(self, item) -> None:
         name = item.title
-        reply = QMessageBox.question(
-            self,
-            "Delete",
-            f'Delete "{name}"?\n\nThis will remove it from your library.',
-            QMessageBox.StandardButton.Cancel | QMessageBox.StandardButton.Yes,
-            QMessageBox.StandardButton.Cancel,
-        )
-        if reply == QMessageBox.StandardButton.Yes:
-            item.delete()
-            self.library_changed.emit()
+        confirm = self._settings.value("library/confirm_delete", True, type=bool)
+        if confirm:
+            reply = QMessageBox.question(
+                self,
+                "Delete",
+                f'Delete "{name}"?\n\nThis will remove it from your library.',
+                QMessageBox.StandardButton.Cancel | QMessageBox.StandardButton.Yes,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+        item.delete()
+        self.library_changed.emit()
 
     def _on_delete_selected(self) -> None:
         selected = self._web_selected if self._web_view is not None else [c for c in self._grid.cards if c.is_selected()]
@@ -755,16 +797,18 @@ class MainWindow(QMainWindow):
         names = "\n".join(f"• {item.title}" for item in selected_items[:10])
         if len(selected_items) > 10:
             names += f"\n… and {len(selected_items) - 10} more"
-        reply = QMessageBox.question(
-            self,
-            "Delete",
-            f"Delete {len(selected)} item(s)?\n\n{names}\n\n"
-            "This will remove them from your library.",
-            QMessageBox.StandardButton.Cancel | QMessageBox.StandardButton.Yes,
-            QMessageBox.StandardButton.Cancel,
-        )
-        if reply != QMessageBox.StandardButton.Yes:
-            return
+        confirm = self._settings.value("library/confirm_delete", True, type=bool)
+        if confirm:
+            reply = QMessageBox.question(
+                self,
+                "Delete",
+                f"Delete {len(selected)} item(s)?\n\n{names}\n\n"
+                "This will remove them from your library.",
+                QMessageBox.StandardButton.Cancel | QMessageBox.StandardButton.Yes,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
         for item in selected_items:
             item.delete()
         self._on_select_toggled(False)
@@ -1295,57 +1339,25 @@ class MainWindow(QMainWindow):
         self._settings_view = AnimeWebView(self, bridge=panel.bridge, surface="settings")
         self._settings_view.setObjectName("settingsGlassView")
         self._settings_view.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        panel.bridge.closeRequested.connect(dialog.reject)
 
         layout = QVBoxLayout(dialog)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self._settings_view)
 
-        # Bottom action bar
+        # Settings are applied by the React surface after the Python bridge confirms success.
+        # Keep a native Close button as a fallback if the web surface is unavailable.
         action_bar = QHBoxLayout()
         action_bar.setContentsMargins(8, 8, 8, 8)
-        # Apply and Close buttons use native QPushButton with Liquid Glass styling
-        apply_btn = QPushButton("Apply")
-        apply_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        apply_btn.setMinimumWidth(100)
-        apply_btn.setStyleSheet(
-            "QPushButton { color: rgba(232, 238, 250, 0.92); background: transparent; "
-            "border: 1px solid rgba(255,255,255,0.14); border-radius: 30px; "
-            "padding: 8px 24px; font: 500 13px 'Segoe UI', system-ui, sans-serif; "
-            "backdrop-filter: blur(24px) saturate(1.8); "
-            "box-shadow: inset 0 1px 1px rgba(255,255,255,0.45), "
-            "0 20px 40px -22px rgba(126,232,208,0.6); "
-            "transition: all 0.3s; }"
-            "QPushButton:hover { background: rgba(126,232,208,0.15); }"
-            "QPushButton:pressed { background: rgba(126,232,208,0.25); }"
-            "QPushButton:focus-visible { outline: 2px solid rgba(126,232,208,0.9); outline-offset: 3px; }"
-        )
-        apply_btn.clicked.connect(self._on_apply_settings)
-        action_bar.addWidget(apply_btn)
         close_btn = QPushButton("Close")
         close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         close_btn.setMinimumWidth(100)
-        close_btn.setStyleSheet(
-            "QPushButton { color: rgba(232, 238, 250, 0.92); background: transparent; "
-            "border: 1px solid rgba(255,255,255,0.14); border-radius: 30px; "
-            "padding: 8px 24px; font: 500 13px 'Segoe UI', system-ui, sans-serif; "
-            "backdrop-filter: blur(24px) saturate(1.8); "
-            "box-shadow: inset 0 1px 1px rgba(255,255,255,0.45), "
-            "0 20px 40px -22px rgba(126,232,208,0.6); "
-            "transition: all 0.3s; }"
-            "QPushButton:hover { background: rgba(126,232,208,0.15); }"
-            "QPushButton:pressed { background: rgba(126,232,208,0.25); }"
-            "QPushButton:focus-visible { outline: 2px solid rgba(126,232,208,0.9); outline-offset: 3px; }"
-        )
         close_btn.clicked.connect(dialog.reject)
+        action_bar.addStretch(1)
         action_bar.addWidget(close_btn)
         layout.addLayout(action_bar)
 
         dialog.exec()
-
-    def _on_apply_settings(self) -> None:
-        """Handle Apply button click from settings dialog."""
-        if self._settings_view is not None and self._settings_view.bridge is not None:
-            self._settings_view.bridge.apply_settings()
 
     def _on_clear_cache(self) -> None:
         """Handle cache clearing."""
@@ -1423,21 +1435,22 @@ class MainWindow(QMainWindow):
         reduce: bool,
     ) -> None:
         """Apply appearance settings to the running application."""
-        from animevault.ui.theme import (
-            BG_DEEP,
-            BG_SURFACE,
-            GLASS_SURFACE,
-            TEXT_PRIMARY,
-            TEXT_SECONDARY,
-            DANGER,
-        )
+        from animevault.ui.theme import application_stylesheet_for_preferences
 
         # Persist appearance preferences to QSettings.
         self._settings.setValue("appearance/reduce_effects", reduce)
-        self._settings.setValue("appearance/liquid_glass", True)
+        self._settings.setValue("appearance/liquid_glass", glass > 0 and not reduce)
         self._settings.setValue("appearance/theme_id", theme_id)
         self._settings.setValue("appearance/glass", glass)
         self._settings.sync()
+
+        colors = {"accent": accent, "secondary": secondary, "bg": bg,
+                  "surface": surface, "text": text}
+        self._appearance_preferences = {
+            "themeId": theme_id, "colors": colors, "glass": glass,
+            "animations": animations, "reduce": reduce,
+        }
+        self.setStyleSheet(application_stylesheet_for_preferences(colors))
 
         # Update native widgets (background, scroll areas, cards) so the
         # reduced-effects preference is honoured across the desktop UI.
@@ -1449,9 +1462,9 @@ class MainWindow(QMainWindow):
         for card in self.findChildren(MediaCard):
             card.set_effects_reduced(reduce)
 
-        # Tell the Qt stylesheet which liquid-glass mode is active so the
-        # desktop chrome (header, toolbar) matches the web surface.
-        self._set_liquid_glass(liquid_glass())
+        # Keep the desktop chrome and the main embedded surface in sync.
+        self._set_liquid_glass(glass > 0 and not reduce)
+        self._apply_settings_to_library_web()
 
     def set_library_defaults(
         self,
@@ -1467,6 +1480,83 @@ class MainWindow(QMainWindow):
         self._settings.setValue("library/confirm_delete", confirm_delete)
         self._settings.setValue("library/auto_complete", auto_complete)
         self._settings.sync()
+        self._library_preferences = {
+            "view": view,
+            "progress": bool(show_progress),
+            "confirmDelete": bool(confirm_delete),
+            "autoComplete": bool(auto_complete),
+        }
+        self._apply_settings_to_library_web()
+
+    def _apply_settings_to_library_web(self, *_args) -> None:
+        """Push committed appearance and library preferences into the React view."""
+        if self._web_view is None:
+            return
+        appearance = self._appearance_preferences
+        colors = appearance.get("colors", {})
+        reduce = bool(appearance.get("reduce", False))
+        glass = max(0, min(100, int(appearance.get("glass", 70))))
+        blur = "blur(0px) saturate(100%) brightness(1)" if reduce else f"blur({glass * 0.16:g}px) saturate(175%) brightness(1.06)"
+        payload = json.dumps({"appearance": appearance, "library": self._library_preferences})
+        script = f"""(() => {{
+          const s = {payload};
+          window.AV_settings = s;
+          const root = document.documentElement;
+          const c = s.appearance.colors || {{}};
+          const set = (name, value) => value && root.style.setProperty(name, value);
+          set('--av-accent', c.accent || '#a3eee2');
+          set('--av-secondary', c.secondary || '#c7b6ff');
+          set('--av-bg', c.bg || '#0a0c10');
+          set('--av-surface', c.surface || '#121722');
+          set('--av-text', c.text || '#f4f6fb');
+          set('--lg-teal', c.accent || '#a3eee2');
+          set('--lg-text', c.text || '#f4f6fb');
+          set('--lg-blur', {json.dumps(blur)});
+          root.classList.toggle('av-reduce-effects', !!s.appearance.reduce);
+          root.classList.toggle('av-no-animations', !s.appearance.animations || !!s.appearance.reduce);
+          window.dispatchEvent(new CustomEvent('animevault:settings-applied', {{ detail: s }}));
+        }})()"""
+        self._web_view.page().runJavaScript(script)
+
+    def apply_additional_settings(self, settings: Settings) -> None:
+        """Apply persisted preferences handled outside appearance/library UI."""
+        self._saved_settings = settings
+        for section in ("notifications", "data", "metadata", "recommendations", "performance", "language"):
+            values = getattr(settings, section, {})
+            for key, value in values.items():
+                self._settings.setValue(f"preferences/{section}/{key}", value)
+        self._settings.sync()
+
+        notifications = settings.notifications
+        self._notification_service.set_enabled(True)
+        self._notification_service.set_episodes(bool(notifications.get("episodes", True)))
+        self._notification_service.set_reminders(bool(notifications.get("reminders", False)))
+        self._notification_service.set_badge_count(1 if notifications.get("badge", True) else 0)
+        self._cache_service.set_max_size(int(settings.performance.get("cache", 500)))
+        self._maybe_create_scheduled_backup()
+
+    def _maybe_create_scheduled_backup(self) -> None:
+        """Create one safe backup per selected interval and enforce retention."""
+        if not getattr(self, "_saved_settings", None):
+            return
+        config = self._saved_settings.data
+        if not config.get("autoBackup", True):
+            return
+        now = datetime.now()
+        raw_last = self._settings.value("data/last_auto_backup", "", type=str)
+        try:
+            last = datetime.fromisoformat(raw_last) if raw_last else None
+        except ValueError:
+            last = None
+        interval_days = {"Daily": 1, "Weekly": 7, "Monthly": 30}.get(config.get("every", "Weekly"), 7)
+        if last is not None and now - last < timedelta(days=interval_days):
+            return
+        path = backup_database()
+        if path is None:
+            return
+        self._settings.setValue("data/last_auto_backup", now.isoformat(timespec="seconds"))
+        self._settings.sync()
+        purge_old_backups(max(1, int(config.get("keep", 7))))
 
     def set_settings_view_visible(self, visible: bool) -> None:
         """Show or hide the settings web view."""

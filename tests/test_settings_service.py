@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 from PySide6.QtCore import QObject
 
-from animevault.ui.settings_service import Settings, SettingsService
+from animevault.ui.settings_service import Settings, SettingsService, should_auto_complete
 from animevault.ui.theme import ACCENT, ACCENT_VIOLET, TEXT_PRIMARY
 
 
@@ -27,6 +27,13 @@ def tmp_app_dir(monkeypatch, tmp_path):
     if settings_file.exists():
         settings_file.unlink()
     return tmp_path
+
+
+def test_auto_complete_requires_enabled_and_reached_total():
+    assert should_auto_complete(12, 12, True) is True
+    assert should_auto_complete(12, 12, False) is False
+    assert should_auto_complete(11, 12, True) is False
+    assert should_auto_complete(0, 0, True) is False
 
 
 class FakeOwner(QObject):
@@ -149,6 +156,29 @@ class TestSettingsPersistence:
         assert s.glass == 60
         assert s.library["view"] == "Grid"  # default preserved
 
+    def test_from_dict_applies_react_flat_values_over_nested_defaults(self, tmp_app_dir):
+        payload = {
+            "values": {
+                "library.view": "List",
+                "library.progress": False,
+                "library.confirmDelete": False,
+                "library.autoComplete": True,
+                "notifications.episodes": False,
+                "notifications.reminders": True,
+                "performance.cache": 900,
+                "recommendations.count": 35,
+            }
+        }
+        settings = Settings.from_dict(payload)
+        assert settings.library == {
+            "view": "List", "progress": False,
+            "confirmDelete": False, "autoComplete": True,
+        }
+        assert settings.notifications["episodes"] is False
+        assert settings.notifications["reminders"] is True
+        assert settings.performance["cache"] == 900
+        assert settings.recommendations["count"] == 35
+
     def test_service_save_and_load(self, tmp_app_dir):
         service = SettingsService()
         original = Settings(themeId="nord", glass=90)
@@ -163,6 +193,33 @@ class TestSettingsPersistence:
         assert service.get("library.view") == "Compact"
         service.set("library.view", "Grid")
         assert service.get("library.view") == "Grid"
+
+
+class TestSettingsMenuRouting:
+    def test_settings_menu_action_defers_modal_open(self, monkeypatch):
+        from animevault.ui import web_view
+
+        owner = FakeOwner()
+        calls = []
+        for name in (
+            "_show_dashboard", "_show_recommendations", "_show_settings_panel",
+            "_on_import_xlsx", "_on_import_csv", "_on_import_sql", "_on_export",
+            "_on_backup", "_on_bulk_enrich", "_on_cloud_sync", "_show_about",
+            "_show_readme", "_on_delete_selected", "_retry_failed_enrichment",
+            "_toggle_selection_mode", "_on_check_for_updates", "_on_view_licenses",
+        ):
+            setattr(owner, name, lambda name=name: calls.append(name))
+
+        scheduled = []
+        monkeypatch.setattr(web_view.QTimer, "singleShot", lambda delay, callback: scheduled.append((delay, callback)))
+        bridge = web_view.LibraryBridge(owner)
+        bridge.menuAction("settings")
+
+        assert calls == []
+        assert len(scheduled) == 1
+        assert scheduled[0][0] == 0
+        scheduled[0][1]()
+        assert calls == ["_show_settings_panel"]
 
 
 class TestSettingsBridge:
@@ -188,6 +245,45 @@ class TestSettingsBridge:
         assert hasattr(bridge, "getVersion")
         assert hasattr(bridge, "checkForUpdates")
         assert hasattr(bridge, "viewLicenses")
+        required_slots = ["getSettings", "setSettings", "settingsAction", "getVersion", "apply_settings", "closeSettings"]
+        required_signals = ["settingsChanged", "settingsApplied", "actionTriggered", "closeRequested"]
+        assert bridge.validate_contract(required_slots, required_signals) == []
+
+    def test_apply_accepts_and_preserves_react_values(self):
+        from animevault.ui.settings_panel import SettingsBridge
+
+        owner = FakeOwner()
+        bridge = SettingsBridge(owner)
+        saved = []
+
+        class Saver:
+            def save(self, settings):
+                saved.append(settings)
+
+        class NotificationNoop:
+            def set_enabled(self, value): pass
+            def set_episodes(self, value): pass
+            def set_reminders(self, value): pass
+            def set_badge_count(self, value): pass
+
+        class CacheNoop:
+            def set_max_size(self, value): pass
+
+        bridge._settings_service = Saver()
+        bridge._notification_service = NotificationNoop()
+        bridge._cache_service = CacheNoop()
+        payload = {
+            "themeId": "midnight", "colors": {"accent": "#7ee8d0"},
+            "customThemes": [], "glass": 70, "animations": True, "reduce": False,
+            "values": {"library.view": "List"},
+        }
+        result = json.loads(bridge.apply_settings(json.dumps(payload)))
+        assert result == {"status": "success"}
+        assert saved[0].values["library.view"] == "List"
+        assert owner.library_calls[-1] == {
+            "view": "List", "show_progress": True,
+            "confirm_delete": True, "auto_complete": False,
+        }
 
     def test_bridge_signals_exist(self):
         from animevault.ui.settings_panel import SettingsBridge
@@ -196,6 +292,16 @@ class TestSettingsBridge:
         assert hasattr(bridge, "settingsChanged")
         assert hasattr(bridge, "settingsApplied")
         assert hasattr(bridge, "actionTriggered")
+        assert hasattr(bridge, "closeRequested")
+
+    def test_close_slot_emits_native_dialog_request(self):
+        from animevault.ui.settings_panel import SettingsBridge
+
+        bridge = SettingsBridge(FakeOwner())
+        calls = []
+        bridge.closeRequested.connect(lambda: calls.append("close"))
+        bridge.closeSettings()
+        assert calls == ["close"]
 
 
 class TestBackupService:

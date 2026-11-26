@@ -16,8 +16,14 @@ function TopBarSurface() {
   return <TopBar bridge={bridge} surface={surface} />;
 }
 
-function SettingsSurfaceRoot({ bridge }) {
-  return <SettingsSurface bridge={bridge} onApply={() => {}} onClose={() => {}} onAction={() => {}} />;
+function SettingsSurfaceRoot() {
+  const { bridge } = useLibrary();
+  return <SettingsSurface
+    bridge={bridge}
+    onApply={() => {}}
+    onClose={() => bridge?.closeSettings?.()}
+    onAction={() => {}}
+  />;
 }
 
 const surface = new URLSearchParams(window.location.search).get("surface");
@@ -25,7 +31,7 @@ createRoot(document.getElementById("root")).render(
   <React.StrictMode>
     {surface === "toolbar" ? <TopBarSurface />
     : surface === "nav" ? <TopBarSurface />
-    : surface === "settings" ? <SettingsSurfaceRoot bridge={null} />
+    : surface === "settings" ? <SettingsSurfaceRoot />
     : <App />}
   </React.StrictMode>,
 );

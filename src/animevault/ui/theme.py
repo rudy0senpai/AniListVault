@@ -150,6 +150,28 @@ def application_stylesheet() -> str:
     """
 
 
+def application_stylesheet_for_preferences(colors: dict[str, str] | None = None) -> str:
+    """Apply the selected appearance palette to all native Qt widgets."""
+    qss = application_stylesheet()
+    if not colors:
+        return qss
+    substitutions = {
+        BG_DEEP: colors.get("bg", BG_DEEP),
+        BG_SURFACE: colors.get("surface", BG_SURFACE),
+        BG_SURFACE_HI: colors.get("surface", BG_SURFACE_HI),
+        BG_INPUT: colors.get("surface", BG_INPUT),
+        ACCENT: colors.get("accent", ACCENT),
+        ACCENT_DIM: colors.get("accent", ACCENT_DIM),
+        ACCENT_DEEP: colors.get("accent", ACCENT_DEEP),
+        ACCENT_VIOLET: colors.get("secondary", ACCENT_VIOLET),
+        ACCENT_VIOLET_DIM: colors.get("secondary", ACCENT_VIOLET_DIM),
+        TEXT_PRIMARY: colors.get("text", TEXT_PRIMARY),
+    }
+    for old, new in substitutions.items():
+        qss = qss.replace(old, new)
+    return qss
+
+
 def tier_color(tier: str | None) -> str:
     """Return the fixed colour for a content tier."""
     return TIER_COLORS.get((tier or "").upper(), TEXT_MUTED)
