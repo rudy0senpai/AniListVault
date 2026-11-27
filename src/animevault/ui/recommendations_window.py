@@ -19,7 +19,8 @@ from PySide6.QtWidgets import QMainWindow
 
 from animevault.services.recommender_service import RecService
 
-DIST = Path(__file__).parent / "web" / "dist" / "index.html"
+WEB_ROOT = Path(__file__).parent / "recommendations_web"
+DIST = WEB_ROOT / "dist" / "index.html"
 _WIN = None
 
 

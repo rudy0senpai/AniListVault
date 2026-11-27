@@ -1,0 +1,17 @@
+{
+    "title": anime.title,
+    "title_ja": anime.title_ja,
+    "anilist_id": anime.anilist_id,
+    "mal_id": anime.mal_id,
+    "genres": anime.genres,
+    "studios": anime.studios,
+    "format": anime.media_type,
+    "year": anime.season_year,
+    "episodes": anime.episodes,
+    "watched": anime.episodes_watched,
+    "status": anime.status,
+    "tier": anime.tier,
+    "favorite": anime.favorite,
+    "synopsis": anime.synopsis,
+    "poster": anime.poster_url,
+}
