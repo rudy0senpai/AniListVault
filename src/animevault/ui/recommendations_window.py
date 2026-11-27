@@ -17,7 +17,7 @@ from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QMainWindow
 
-from .recommender_service import RecService
+from animevault.services.recommender_service import RecService
 
 DIST = Path(__file__).parent / "web" / "dist" / "index.html"
 _WIN = None
