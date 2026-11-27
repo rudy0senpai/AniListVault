@@ -63,6 +63,7 @@ from animevault.services.notification_service import NotificationService
 from animevault.services.update_service import UpdateService, view_licenses
 from animevault.ui.settings_service import SettingsService, Settings
 from animevault.ui.settings_panel import SettingsPanel
+from animevault.ui.liquid_bubble_topbar import LiquidBubbleTopBar
 
 #: Sort modes offered in the Sort control.
 SORT_OPTIONS = [
@@ -190,7 +191,6 @@ class MainWindow(QMainWindow):
         outer.addWidget(navbar)
         outer.addWidget(header)
         outer.addWidget(toolbar)
-        outer.addWidget(self._build_search_row())
 
         # The single embedded React surface hosts both Library and Dashboard.
         self._stack = QStackedWidget()
@@ -248,110 +248,108 @@ class MainWindow(QMainWindow):
         super().closeEvent(event)
 
     def _build_header(self) -> QWidget:
+        # Keep the host-owned AnimeVault brand/category/settings row.
         header = QWidget()
         header.setObjectName("headerBar")
-        header.setFixedHeight(50 if self._topbar_available else 102)
-        root = QVBoxLayout(header)
-        root.setContentsMargins(18, 5, 18, 5)
-        root.setSpacing(3)
-
-        nav_row = QWidget()
-        nav_row.setObjectName("headerNavigationRow")
-        row = QHBoxLayout(nav_row)
-        row.setContentsMargins(0, 0, 0, 0)
+        header.setFixedHeight(50)
+        row = QHBoxLayout(header)
+        row.setContentsMargins(18, 5, 18, 5)
         row.setSpacing(12)
-
         icon = QLabel("◐")
         icon.setObjectName("appIcon")
         row.addWidget(icon)
-
         title = RadialGradientLabel("AnimeVault")
         title.setObjectName("appTitle")
         row.addWidget(title)
         row.addSpacing(10)
-
         self._nav_buttons: dict[str, QPushButton] = {}
         for category in (MEDIA_ANIME, MEDIA_MANGA, MEDIA_MANHWA, MEDIA_MANHUA):
             button = QPushButton(CATEGORY_LABELS[category])
             button.setObjectName("navTab")
             button.setCheckable(True)
             button.setCursor(Qt.CursorShape.PointingHandCursor)
-            button.clicked.connect(lambda _checked, c=category: self._on_category_changed(c))
+            button.clicked.connect(lambda _checked=False, c=category: self._on_category_changed(c))
             self._nav_buttons[category] = button
             row.addWidget(button)
-        self._nav_buttons[MEDIA_ANIME].setChecked(True)
-        row.addStretch()
-
+        self._nav_buttons[self._category].setChecked(True)
+        row.addStretch(1)
         settings = QPushButton("⚙")
         settings.setObjectName("settingsButton")
         settings.setFixedSize(38, 38)
         settings.setToolTip("Settings")
         settings.clicked.connect(self._show_settings_panel)
         row.addWidget(settings)
-        # Native toolbar owns the title, tabs and settings — always show the native row.
-        root.addWidget(nav_row)
-
-        summary_scroll = QScrollArea()
-        summary_scroll.setObjectName("headerSummaryScroll")
-        summary_scroll.setWidgetResizable(True)
-        summary_scroll.setFixedHeight(38)
-        summary_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        summary_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        summary_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        summary_scroll.setStyleSheet("background: transparent; border: none;")
-        summary_scroll.viewport().setStyleSheet("background: transparent;")
-        summary_content = QWidget()
-        summary_layout = QHBoxLayout(summary_content)
-        summary_layout.setContentsMargins(0, 0, 0, 0)
-        summary_layout.setSpacing(6)
-        summary_fields = (
-            ("anime_total", "Anime"),
-            ("anime_watching", "Watching"),
-            ("anime_completed", "Completed"),
-            ("anime_planned", "Plan to Watch"),
-            ("manga_total", "Manga"),
-            ("manhwa_total", "Manhwa"),
-            ("manhua_total", "Manhua"),
-        )
-        self._summary_kpis: dict[str, SummaryKpiCard] = {}
-        for key, label in summary_fields:
-            card = SummaryKpiCard(label, "0")
-            self._summary_kpis[key] = card
-            summary_layout.addWidget(card)
-        summary_scroll.setWidget(summary_content)
-        root.addWidget(summary_scroll)
         return header
 
-
     def _build_toolbar(self) -> QWidget:
-        native_toolbar = self._build_native_toolbar()
-        self._native_toolbar = native_toolbar
-        # Reverted: always use the native toolbar (no React liquid glass topbar).
-        native_toolbar.show()
-        self._topbar_available = False
-        self._menu_web_view = None
-        return native_toolbar
+        # Native PySide6 Bubble toolbar; no duplicate legacy toolbar/search widgets.
+        topbar = LiquidBubbleTopBar(
+            tier_options=["All", *list(TIERS), "Unassigned"],
+            status_options=["All", *list(VALID_STATUSES)],
+            format_options=type_options(self._category),
+            sort_options=SORT_OPTIONS,
+            initial_category=self._category,
+            parent=self,
+        )
+        self._topbar = topbar
+        self._summary_kpis = topbar.summary_pills
+        self._add_button = topbar.add_button
+        self._search_field = topbar.search_field
+        self._filter_combo = topbar.tier_combo
+        self._status_combo = topbar.status_combo
+        self._type_combo = topbar.format_combo
+        self._sort_combo = topbar.sort_combo
+        self._delete_button = topbar.delete_button
+        self._retry_failed_button = topbar.retry_button
+        self._select_button = None
+
+        topbar.recommendations_requested.connect(self._show_recommendations)
+        topbar.dashboard_requested.connect(self._show_dashboard)
+        topbar.add_requested.connect(self._on_add)
+        topbar.delete_requested.connect(self._on_delete_selected)
+        topbar.fetch_missing_requested.connect(lambda: self._on_bulk_enrich(False))
+        topbar.retry_failed_requested.connect(self._retry_failed_enrichment)
+
+        topbar.help_action.connect(
+            lambda action: self._show_about() if action == "about" else
+            self._show_readme() if action == "open_readme" else None
+        )
+        topbar.upload_action.connect(
+            lambda kind: self._on_import_xlsx() if kind == "xlsx" else
+            self._on_import_csv() if kind == "csv" else
+            self._on_import_sql() if kind == "sql" else None
+        )
+        topbar.export_action.connect(
+            lambda kind: self._on_export(kind) if kind in {"csv", "xlsx", "ods", "sql"} else None
+        )
+
+        def handle_tool_action(action: str) -> None:
+            # The dashboard has a dedicated signal to avoid opening twice.
+            actions = {
+                "fetch_missing": lambda: self._on_bulk_enrich(False),
+                "refresh_all": lambda: self._on_bulk_enrich(True),
+                "cloud_sync": self._on_cloud_sync,
+            }
+            callback = actions.get(action)
+            if callback is not None:
+                callback()
+        topbar.tools_action.connect(handle_tool_action)
+
+        topbar.search_changed.connect(self._on_search_changed)
+        topbar.tier_changed.connect(self._on_filter_tier_changed)
+        topbar.status_changed.connect(self._on_filter_status_changed)
+        topbar.media_format_changed.connect(self._on_filter_type_changed)
+        topbar.sort_changed.connect(
+            lambda value: self._on_sort_changed(self._sort_combo.findData(value))
+        )
+        topbar.set_category(self._category)
+        return topbar
 
     def _build_navbar(self) -> QWidget:
-        if self._web_view_class is None or self._shared_bridge is None:
-            placeholder = QWidget()
-            placeholder.setFixedHeight(0)
-            return placeholder
-        try:
-            self._navbar_web_view = self._web_view_class(
-                self, bridge=self._shared_bridge, surface="nav"
-            )
-            self._navbar_web_view.setObjectName("liquidGlassNavigationBar")
-            self._navbar_web_view.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-            self._navbar_web_view.setFixedHeight(60)
-            return self._navbar_web_view
-        except Exception:
-            logger.exception("React Liquid Glass navigation tabs unavailable")
-            self._web_view_class = None
-            self._shared_bridge = None
-            placeholder = QWidget()
-            placeholder.setFixedHeight(0)
-            return placeholder
+        # Category navigation is owned by the existing native MainWindow header.
+        placeholder = QWidget()
+        placeholder.setFixedHeight(0)
+        return placeholder
 
     def _set_menu_bar_height(self, height: int) -> None:
         if self._menu_web_view is not None:
@@ -444,55 +442,10 @@ class MainWindow(QMainWindow):
         return toolbar
 
     def _build_search_row(self) -> QWidget:
-        row_widget = QWidget()
-        row_widget.setObjectName("searchRow")
-        row = QHBoxLayout(row_widget)
-        row.setContentsMargins(18, 14, 18, 14)
-        row.setSpacing(14)
-
-        self._add_button = HoverLiftButton("＋  Add Anime")
-        self._add_button.setObjectName("primaryButton")
-        self._add_button.clicked.connect(self._on_add)
-        row.addWidget(self._add_button)
-
-        self._search_field = QLineEdit()
-        self._search_field.setObjectName("searchField")
-        self._search_field.setPlaceholderText("Search Anime...")
-        self._search_field.setClearButtonEnabled(True)
-        self._search_field.textChanged.connect(self._on_search_changed)
-        row.addWidget(self._search_field, 1)
-
-        # Filter — tier + status combined into one control's options
-        self._filter_combo = QComboBox()
-        self._filter_combo.addItem("All")
-        self._filter_combo.setToolTip("Filter by tier")
-        self._filter_combo.currentTextChanged.connect(self._on_filter_tier_changed)
-        row.addWidget(self._filter_combo)
-
-        self._status_combo = QComboBox()
-        self._status_combo.addItems(["All"] + list(VALID_STATUSES))
-        self._status_combo.setToolTip("Filter by status")
-        self._status_combo.currentTextChanged.connect(
-            self._on_filter_status_changed
-        )
-        row.addWidget(self._status_combo)
-
-        self._type_combo = QComboBox()
-        self._type_combo.currentTextChanged.connect(
-            self._on_filter_type_changed
-        )
-        row.addWidget(self._type_combo)
-
-        self._sort_combo = QComboBox()
-        for label, value in SORT_OPTIONS:
-            self._sort_combo.addItem(label, value)
-        self._sort_combo.setToolTip("Sort order")
-        self._sort_combo.currentIndexChanged.connect(self._on_sort_changed)
-        row.addWidget(self._sort_combo)
-
-        self._populate_tier_filter()
-        self._populate_type_filter()
-        return row_widget
+        # Search and filters are integrated into LiquidBubbleTopBar.
+        placeholder = QWidget()
+        placeholder.setFixedHeight(0)
+        return placeholder
 
     def _populate_tier_filter(self) -> None:
         """Fill the tier filter with SSS→F plus Unassigned (never alphabetical)."""
@@ -574,6 +527,9 @@ class MainWindow(QMainWindow):
             f"Search {CATEGORY_LABELS[category]}..."
         )
         self._add_button.setText(f"＋  Add {CATEGORY_LABELS[category]}")
+        if getattr(self, "_topbar", None) is not None:
+            self._topbar.set_category(category)
+            self._topbar.set_filter_options(media_format=type_options(category))
         self._populate_type_filter()
         if self._shared_bridge is not None:
             self._shared_bridge.categoryChanged.emit(category)
@@ -609,7 +565,8 @@ class MainWindow(QMainWindow):
             self._web_selected = []
             self._web_view.bridge.setSelectionMode(enabled)
             self._delete_button.setEnabled(False)
-            self._select_button.setText("✓  Selecting" if enabled else "✓  Select")
+            if self._select_button is not None:
+                self._select_button.setText("✓  Selecting" if enabled else "✓  Select")
             return
         for card in self._grid.cards:
             card.set_select_mode(enabled)
@@ -618,7 +575,8 @@ class MainWindow(QMainWindow):
         self._delete_button.setEnabled(
             enabled and any(c.is_selected() for c in self._grid.cards)
         )
-        self._select_button.setText("✓  Selecting" if enabled else "✓  Select")
+        if self._select_button is not None:
+            self._select_button.setText("✓  Selecting" if enabled else "✓  Select")
 
     # ── Data loading ───────────────────────────────────────────────
 
@@ -725,6 +683,7 @@ class MainWindow(QMainWindow):
             self._dashboard.refresh(animes, literature)
 
     def _update_header_summary(self, animes, literature) -> None:
+        # Populate KPI values from real model records on every refresh.
         statuses = Counter(str(getattr(item, "status", "") or "").casefold() for item in animes)
         counts = Counter(str(getattr(item, "category", "") or "").casefold() for item in literature)
         values = {
@@ -736,12 +695,8 @@ class MainWindow(QMainWindow):
             "manhwa_total": counts[MEDIA_MANHWA],
             "manhua_total": counts[MEDIA_MANHUA],
         }
-        for key, value in values.items():
-            card = getattr(self, "_summary_kpis", {}).get(key)
-            if card is not None:
-                card.set_value(value)
-
-    # ── Actions ────────────────────────────────────────────────────
+        if getattr(self, "_topbar", None) is not None:
+            self._topbar.set_summary(values)
 
     def _on_add(self) -> None:
         dialog = AddMediaDialog(self._category, self)
@@ -811,15 +766,14 @@ class MainWindow(QMainWindow):
         )
 
     def _toggle_selection_mode(self) -> None:
+        # Selection mode remains available to existing card/bridge workflows,
+        # but there is deliberately no visible Select control in this toolbar.
         self._select_mode = not self._select_mode
         if self._web_view is not None:
             self._web_view.bridge.setSelectionMode(self._select_mode)
             self._delete_button.setEnabled(False)
-            self._select_button.setText("✓  Selecting" if self._select_mode else "✓  Select")
         else:
             self._on_select_toggled(self._select_mode)
-
-    # ── Import ─────────────────────────────────────────────────────
 
     def _on_import_xlsx(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
